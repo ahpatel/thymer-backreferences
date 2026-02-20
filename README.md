@@ -36,6 +36,29 @@ Edit `custom` in `plugins/backlinks/plugin.json`:
 - `collapsedByDefault` (boolean): start the footer collapsed
 - `showSelf` (boolean): include references from the current record (default false)
 
+## Transclude (Deferred)
+
+Original goal: make each backlink row behave like a real transclusion so the line is editable/interactable (not just a click-only link).
+
+Findings (SDK + official examples):
+
+- The public Plugin SDK does not currently expose the editor's native per-line "..." menu / "Transclude" option, and it also does not provide an API to render an editable line item inside custom plugin DOM.
+- Official examples implement transclusion behavior by creating a line item of type `ref` and setting meta `itemref` to the source line item GUID (example: `/home/chima/Projects/Knowledgebase/Thymer/Example Plugins and Themes/App Plugins/thymer-synchub/plannerhub/plugin.js`).
+
+Known transclusion write-path (as used in the official examples):
+
+```js
+// sourceLineGuid = the GUID of the line item you want to transclude
+const newItem = await record.createLineItem(null, null, 'ref', null, null);
+if (newItem) await newItem.setMetaProperties({ itemref: sourceLineGuid });
+```
+
+Note: `itemref` is not currently typed in the public SDK; it is set via free-form meta properties.
+
+Decision:
+
+- Deferred for now (no code changes). If the SDK later exposes a supported way to embed editor-backed line items (or hook into the native line options menu), we can revisit.
+
 ## Verification Checklist
 
 1. Open a record A that you know is referenced by other records.
