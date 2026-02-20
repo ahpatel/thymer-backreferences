@@ -1,6 +1,6 @@
 {
   "ver": 1,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "name": "Backlinks",
   "icon": "ti-link",
   "description": "Roam-style Linked References footer for every page",

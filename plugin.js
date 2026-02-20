@@ -1,7 +1,7 @@
 class Plugin extends AppPlugin {
   onLoad() {
     // NOTE: Thymer strips top-level code outside the Plugin class.
-    this._version = '0.1.0';
+    this._version = '0.2.0';
     this._pluginName = 'Backlinks';
 
     this._panelStates = new Map();
@@ -40,6 +40,7 @@ class Plugin extends AppPlugin {
     // Keep backlinks reasonably fresh when references are created/edited elsewhere.
     this._eventHandlerIds.push(this.events.on('lineitem.updated', (ev) => this.handleLineItemUpdated(ev)));
     this._eventHandlerIds.push(this.events.on('lineitem.deleted', () => this.handleLineItemDeleted()));
+    this._eventHandlerIds.push(this.events.on('record.updated', (ev) => this.handleRecordUpdated(ev)));
 
     const panel = this.ui.getActivePanel();
     if (panel) this.handlePanelChanged(panel, 'initial');
@@ -435,20 +436,43 @@ class Plugin extends AppPlugin {
     const showSelf = cfg.custom?.showSelf === true;
 
     const query = `@linkto = "${recordGuid}"`;
-    const result = await this.data.searchByQuery(query, maxResults);
+    const [searchSettled, propSettled] = await Promise.allSettled([
+      this.data.searchByQuery(query, maxResults),
+      this.getPropertyBacklinkGroups(record, recordGuid, { showSelf })
+    ]);
 
     // Ignore stale refreshes.
     if (!this._panelStates.has(panelId) || state.refreshSeq !== seq) return;
 
-    if (result?.error) {
-      this.renderError(state, result.error);
-      this.setLoadingState(state, false);
-      return;
+    let linkedError = '';
+    let linkedGroups = [];
+    if (searchSettled.status === 'fulfilled') {
+      const result = searchSettled.value;
+      if (result?.error) {
+        linkedError = result.error;
+      } else {
+        const lines = Array.isArray(result?.lines) ? result.lines : [];
+        linkedGroups = this.groupBacklinkLines(lines, recordGuid, { showSelf });
+      }
+    } else {
+      linkedError = 'Error loading linked references.';
     }
 
-    const lines = Array.isArray(result?.lines) ? result.lines : [];
-    const grouped = this.groupBacklinkLines(lines, recordGuid, { showSelf });
-    this.renderGroups(state, grouped, { maxResults, reason: reason || '' });
+    let propertyError = '';
+    let propertyGroups = [];
+    if (propSettled.status === 'fulfilled') {
+      propertyGroups = Array.isArray(propSettled.value) ? propSettled.value : [];
+    } else {
+      propertyError = 'Error loading property references.';
+    }
+
+    this.renderReferences(state, {
+      propertyGroups,
+      propertyError,
+      linkedGroups,
+      linkedError,
+      maxResults
+    });
     this.setLoadingState(state, false);
   }
 
@@ -459,6 +483,14 @@ class Plugin extends AppPlugin {
   }
 
   // ---------- Event-driven freshness ----------
+
+  handleRecordUpdated(ev) {
+    // Property-based references (record-link fields) do not emit lineitem events.
+    // Refresh footers when key-value properties change so property backlinks stay fresh.
+    if (!ev) return;
+    if (!ev.properties) return;
+    this.refreshAllPanels({ force: false, reason: 'record.updated' });
+  }
 
   handleLineItemUpdated(ev) {
     if (!ev?.hasSegments?.() || typeof ev.getSegments !== 'function') return;
@@ -495,6 +527,80 @@ class Plugin extends AppPlugin {
   }
 
   // ---------- Grouping + rendering ----------
+
+  async getPropertyBacklinkGroups(targetRecord, targetGuid, { showSelf }) {
+    if (!targetRecord || !targetGuid) return [];
+    if (typeof targetRecord.getBackReferenceRecords !== 'function') return [];
+
+    const backrefs = await targetRecord.getBackReferenceRecords();
+    const byProp = new Map();
+
+    for (const src of backrefs || []) {
+      const srcGuid = src?.guid || null;
+      if (!srcGuid) continue;
+      if (!showSelf && srcGuid === targetGuid) continue;
+
+      const props = src.getAllProperties?.() || [];
+      for (const p of props || []) {
+        const propName = (p?.name || '').trim();
+        if (!propName) continue;
+        if (!this.propertyReferencesGuid(p, targetGuid)) continue;
+
+        let group = byProp.get(propName) || null;
+        if (!group) {
+          group = new Map();
+          byProp.set(propName, group);
+        }
+        group.set(srcGuid, src);
+      }
+    }
+
+    const groups = Array.from(byProp.entries()).map(([propertyName, recordMap]) => ({
+      propertyName,
+      records: Array.from(recordMap.values())
+    }));
+
+    groups.sort((a, b) => {
+      const an = (a.propertyName || '').toLowerCase();
+      const bn = (b.propertyName || '').toLowerCase();
+      return an < bn ? -1 : an > bn ? 1 : 0;
+    });
+
+    for (const g of groups) {
+      g.records.sort((a, b) => {
+        const ad = a?.getUpdatedAt?.() || null;
+        const bd = b?.getUpdatedAt?.() || null;
+        const at = ad ? ad.getTime() : 0;
+        const bt = bd ? bd.getTime() : 0;
+        if (bt !== at) return bt - at;
+        const an = (a?.getName?.() || '').toLowerCase();
+        const bn = (b?.getName?.() || '').toLowerCase();
+        return an < bn ? -1 : an > bn ? 1 : 0;
+      });
+    }
+
+    return groups;
+  }
+
+  propertyReferencesGuid(prop, targetGuid) {
+    if (!prop || !targetGuid) return false;
+
+    try {
+      const v = prop.choice?.();
+      if (typeof v === 'string' && v === targetGuid) return true;
+    } catch (e) {
+      // ignore
+    }
+
+    try {
+      const v = prop.text?.();
+      if (typeof v === 'string' && v === targetGuid) return true;
+    } catch (e) {
+      // ignore
+    }
+
+    return false;
+  }
 
   groupBacklinkLines(lines, targetGuid, { showSelf }) {
     const byRecord = new Map();
@@ -547,27 +653,150 @@ class Plugin extends AppPlugin {
 
     const el = document.createElement('div');
     el.className = 'tlr-error';
-    el.textContent = message || 'Error loading linked references.';
+    el.textContent = message || 'Error loading references.';
     state.bodyEl.appendChild(el);
   }
 
-  renderGroups(state, groups, { maxResults }) {
+  renderReferences(state, { propertyGroups, propertyError, linkedGroups, linkedError, maxResults }) {
     if (!state?.bodyEl || !state?.countEl) return;
 
-    state.bodyEl.innerHTML = '';
+    const body = state.bodyEl;
+    body.innerHTML = '';
+
+    const props = Array.isArray(propertyGroups) ? propertyGroups : [];
+    const linked = Array.isArray(linkedGroups) ? linkedGroups : [];
+
+    const propRefCount = props.reduce((n, g) => n + (g?.records?.length || 0), 0);
+    const linkedRefCount = linked.reduce((n, g) => n + (g?.lines?.length || 0), 0);
+
+    const uniquePages = new Set();
+    for (const g of props) {
+      for (const r of g?.records || []) {
+        const guid = r?.guid || null;
+        if (guid) uniquePages.add(guid);
+      }
+    }
+    for (const g of linked) {
+      const guid = g?.record?.guid || null;
+      if (guid) uniquePages.add(guid);
+    }
+
+    const parts = [];
+    if (uniquePages.size > 0) parts.push(`${uniquePages.size} page${uniquePages.size === 1 ? '' : 's'}`);
+    if (propRefCount > 0) parts.push(`${propRefCount} prop ref${propRefCount === 1 ? '' : 's'}`);
+    if (linkedRefCount > 0) parts.push(`${linkedRefCount} line ref${linkedRefCount === 1 ? '' : 's'}`);
+    state.countEl.textContent = parts.join(' | ');
+
+    const hasContent = props.length > 0 || linked.length > 0;
+    const hasErrors = Boolean(propertyError) || Boolean(linkedError);
+
+    if (!hasContent && !hasErrors) {
+      const empty = document.createElement('div');
+      empty.className = 'tlr-empty';
+      empty.textContent = 'No linked references.';
+      body.appendChild(empty);
+      return;
+    }
+
+    const showLinkedSectionHeader = props.length > 0 || Boolean(propertyError);
+
+    if (props.length > 0 || propertyError) {
+      this.appendSectionTitle(body, 'Property References');
+      if (propertyError) {
+        this.appendError(body, propertyError);
+      } else {
+        this.appendPropertyReferenceGroups(body, props);
+      }
+    }
+
+    if (showLinkedSectionHeader) {
+      const divider = document.createElement('div');
+      divider.className = 'tlr-divider';
+      body.appendChild(divider);
+      this.appendSectionTitle(body, 'Linked References');
+    }
+
+    if (linkedError) {
+      this.appendError(body, linkedError);
+      return;
+    }
+
+    this.appendLinkedReferenceGroups(body, linked, { maxResults });
+  }
+
+  appendSectionTitle(container, text) {
+    if (!container) return;
+    const el = document.createElement('div');
+    el.className = 'tlr-section-title';
+    el.textContent = text || '';
+    container.appendChild(el);
+  }
+
+  appendError(container, message) {
+    if (!container) return;
+    const el = document.createElement('div');
+    el.className = 'tlr-error';
+    el.textContent = message || 'Error loading references.';
+    container.appendChild(el);
+  }
+
+  appendPropertyReferenceGroups(container, groups) {
+    if (!container) return;
+
+    for (const g of groups || []) {
+      const propName = (g?.propertyName || '').trim();
+      if (!propName) continue;
+
+      const groupEl = document.createElement('div');
+      groupEl.className = 'tlr-prop-group';
+
+      const header = document.createElement('div');
+      header.className = 'tlr-prop-header';
+
+      const title = document.createElement('div');
+      title.className = 'tlr-prop-title';
+      title.textContent = `${propName} in...`;
+
+      const meta = document.createElement('div');
+      meta.className = 'tlr-prop-meta';
+      meta.textContent = `${g?.records?.length || 0}`;
+
+      header.appendChild(title);
+      header.appendChild(meta);
+
+      const recsEl = document.createElement('div');
+      recsEl.className = 'tlr-prop-records';
+
+      for (const r of g?.records || []) {
+        const guid = r?.guid || null;
+        if (!guid) continue;
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'tlr-prop-record';
+        btn.dataset.action = 'open-record';
+        btn.dataset.recordGuid = guid;
+        btn.textContent = r.getName?.() || 'Untitled';
+        recsEl.appendChild(btn);
+      }
+
+      groupEl.appendChild(header);
+      groupEl.appendChild(recsEl);
+      container.appendChild(groupEl);
+    }
+  }
+
+  appendLinkedReferenceGroups(container, groups, { maxResults }) {
+    if (!container) return;
 
     const pageCount = groups.length;
     const refCount = groups.reduce((n, g) => n + (g?.lines?.length || 0), 0);
-    state.countEl.textContent =
-      pageCount === 0
-        ? ''
-        : `${pageCount} page${pageCount === 1 ? '' : 's'} | ${refCount} ref${refCount === 1 ? '' : 's'}`;
 
     if (pageCount === 0) {
       const empty = document.createElement('div');
       empty.className = 'tlr-empty';
       empty.textContent = 'No linked references.';
-      state.bodyEl.appendChild(empty);
+      container.appendChild(empty);
       return;
     }
 
@@ -625,14 +854,14 @@ class Plugin extends AppPlugin {
 
       groupEl.appendChild(header);
       groupEl.appendChild(linesEl);
-      state.bodyEl.appendChild(groupEl);
+      container.appendChild(groupEl);
     }
 
     if (refCount >= maxResults) {
       const note = document.createElement('div');
       note.className = 'tlr-note';
       note.textContent = `Showing first ${maxResults} matches.`;
-      state.bodyEl.appendChild(note);
+      container.appendChild(note);
     }
   }
 
@@ -838,6 +1067,65 @@ class Plugin extends AppPlugin {
       .tlr-error {
         color: var(--text-muted, rgba(0, 0, 0, 0.6));
         padding: 8px 0;
+      }
+
+      .tlr-section-title {
+        margin-top: 12px;
+        margin-bottom: 6px;
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--text-muted, rgba(0, 0, 0, 0.6));
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+
+      .tlr-divider {
+        margin: 12px 0 8px;
+        border-top: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.12));
+      }
+
+      .tlr-prop-group { margin: 10px 0 14px; }
+
+      .tlr-prop-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 6px 8px;
+        border-radius: 10px;
+        border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.12));
+        background: var(--bg-panel, transparent);
+      }
+
+      .tlr-prop-title {
+        font-weight: 600;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .tlr-prop-meta {
+        color: var(--text-muted, rgba(0, 0, 0, 0.6));
+        font-size: 12px;
+        flex: 0 0 auto;
+      }
+
+      .tlr-prop-records { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+
+      .tlr-prop-record {
+        width: 100%;
+        border: 1px solid transparent;
+        background: transparent;
+        padding: 6px 8px;
+        border-radius: 10px;
+        cursor: pointer;
+        text-align: left;
+        color: var(--text, inherit);
+      }
+
+      .tlr-prop-record:hover {
+        border-color: var(--border-subtle, rgba(0, 0, 0, 0.12));
+        background: var(--bg-hover, rgba(0, 0, 0, 0.04));
       }
 
       .tlr-group { margin: 10px 0 14px; }
