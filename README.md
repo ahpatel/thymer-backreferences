@@ -20,7 +20,7 @@ How it works:
 4. Paste `plugin.js` into Custom Code
 5. Save
 
-Note: This plugin injects its own CSS at runtime; `plugin.css` can stay empty.
+Note: This plugin injects its own CSS at runtime; no `plugin.css` is needed.
 
 ## Usage
 
