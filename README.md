@@ -2,6 +2,10 @@
 
 Adds a Roam-style **Linked References** section to the bottom of each record/page, plus Tana-style **Property References** grouped by the property name ("[Property] in...").
 
+## Screenshot
+
+![Backreferences footer screenshot](screenshot-2026-02-20_16-48-44.png)
+
 How it works:
 
 - Uses the Thymer search index via `data.searchByQuery()` with `@linkto = "<recordGuid>"`.
@@ -12,11 +16,11 @@ How it works:
 
 1. In Thymer, open Command Palette (Ctrl/Cmd+P) and select `Plugins`
 2. Create (or open) a **Global Plugin**
-3. Paste `plugins/backlinks/plugin.json` into Configuration
-4. Paste `plugins/backlinks/plugin.js` into Custom Code
+3. Paste `plugin.json` into Configuration
+4. Paste `plugin.js` into Custom Code
 5. Save
 
-Note: This plugin injects its own CSS at runtime; `plugins/backlinks/plugin.css` can stay empty.
+Note: This plugin injects its own CSS at runtime; `plugin.css` can stay empty.
 
 ## Usage
 
@@ -33,7 +37,7 @@ Command palette:
 
 ## Configuration
 
-Edit `custom` in `plugins/backlinks/plugin.json`:
+Edit `custom` in `plugin.json`:
 
 - `maxResults` (number): cap for search results (SDK default is 100; plugin defaults to 200)
 - `collapsedByDefault` (boolean): start the footer collapsed
