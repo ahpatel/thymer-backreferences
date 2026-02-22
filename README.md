@@ -45,6 +45,21 @@ Edit `custom` in `plugin.json`:
 - `collapsedByDefault` (boolean): start the footer collapsed
 - `showSelf` (boolean): include references from the current record (default false)
 
+## UI Animation Notes
+
+In the native Thymer editor, clicking the "open" arrow on an inline record reference (inserted via `@@`) triggers a short blink/flash effect on the selected link.
+
+As of the current public Plugin SDK, that blink/flash behavior is not exposed as an API that plugins can call.
+
+What plugins *can* use today:
+
+- `this.ui.bounce(element)` to draw attention to a plugin-owned DOM element.
+- `toaster.bounce()` on a toaster returned from `this.ui.addToaster()`.
+
+Decision:
+
+- Backreferences does not try to replicate the native blink effect; we'll revisit if the SDK adds a supported highlight/flash API.
+
 ## Transclude (Deferred)
 
 Original goal: make each backlink row behave like a real transclusion so the line is editable/interactable (not just a click-only link).
