@@ -42,3 +42,23 @@ Goal: Clarify manual copy/paste install behavior so users do not need a "weird s
 
 - SDK/examples use mixed orders (config->code and code->config), indicating no strict order dependency.
 - Updated README to reduce ambiguity and document reliable update recovery flow (re-paste both, save once, disable/enable, refresh).
+
+---
+
+# 2026-02-23: Sort/Search Header UI Fixes
+
+Goal: Fix sort button visibility and prevent header layout shifts when opening search.
+
+## Plan
+
+- [x] Reproduce issues from user screenshots and identify root causes
+- [x] Replace fragile sort icon dependency with a deterministic in-plugin glyph
+- [x] Keep sort control pinned to the right of the search field when search is open
+- [x] Normalize control heights and nowrap behavior to reduce header text shifting
+- [ ] Verify in Thymer UI after MCP push
+
+## Review
+
+- Sort control now uses an internal CSS glyph instead of a missing icon font class.
+- Header control order was adjusted so sort stays to the right when search opens.
+- Search wrapper/button sizing was normalized and title/count nowrap was enforced to reduce visual shifting.

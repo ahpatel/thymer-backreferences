@@ -1,7 +1,7 @@
 class Plugin extends AppPlugin {
   onLoad() {
     // NOTE: Thymer strips top-level code outside the Plugin class.
-    this._version = '0.3.0';
+    this._version = '0.3.1';
     this._pluginName = 'Backreferences';
 
     this._panelStates = new Map();
@@ -366,11 +366,16 @@ class Plugin extends AppPlugin {
     sortToggle.setAttribute('aria-haspopup', 'menu');
     sortToggle.setAttribute('aria-expanded', state.sortMenuOpen === true ? 'true' : 'false');
     sortToggle.title = 'Sort options';
-    try {
-      sortToggle.appendChild(this.ui.createIcon('ti-arrows-sort'));
-    } catch (e) {
-      sortToggle.textContent = 'Sort';
-    }
+    const sortGlyph = document.createElement('span');
+    sortGlyph.className = 'tlr-sort-glyph';
+    sortGlyph.setAttribute('aria-hidden', 'true');
+    const sortBars = document.createElement('span');
+    sortBars.className = 'tlr-sort-glyph-bars';
+    const sortArrows = document.createElement('span');
+    sortArrows.className = 'tlr-sort-glyph-arrows';
+    sortGlyph.appendChild(sortBars);
+    sortGlyph.appendChild(sortArrows);
+    sortToggle.appendChild(sortGlyph);
 
     const sortMenu = document.createElement('div');
     sortMenu.className = 'tlr-sort-menu';
@@ -384,8 +389,8 @@ class Plugin extends AppPlugin {
     header.appendChild(count);
     header.appendChild(spacer);
     header.appendChild(searchToggle);
-    header.appendChild(sortWrap);
     header.appendChild(searchWrap);
+    header.appendChild(sortWrap);
 
     const body = document.createElement('div');
     body.className = 'tlr-body';
@@ -2039,16 +2044,21 @@ class Plugin extends AppPlugin {
 
       .tlr-title {
         font-weight: 600;
+        white-space: nowrap;
       }
 
       .tlr-count {
         color: var(--text-muted, rgba(0, 0, 0, 0.6));
         font-size: 12px;
+        white-space: nowrap;
       }
 
       .tlr-spacer { flex: 1; }
 
       .tlr-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
         border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.12));
         background: var(--bg-panel, transparent);
         color: var(--text, inherit);
@@ -2056,6 +2066,8 @@ class Plugin extends AppPlugin {
         border-radius: 8px;
         cursor: pointer;
         font-size: 12px;
+        line-height: 1;
+        min-height: 28px;
       }
 
       .tlr-btn:hover {
@@ -2066,6 +2078,7 @@ class Plugin extends AppPlugin {
         display: inline-flex;
         align-items: center;
         justify-content: center;
+        min-width: 30px;
       }
 
       .tlr-sort-wrap {
@@ -2078,6 +2091,61 @@ class Plugin extends AppPlugin {
         display: inline-flex;
         align-items: center;
         justify-content: center;
+        min-width: 30px;
+      }
+
+      .tlr-sort-glyph {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        width: 14px;
+        height: 12px;
+      }
+
+      .tlr-sort-glyph-bars {
+        position: relative;
+        width: 8px;
+        height: 10px;
+      }
+
+      .tlr-sort-glyph-bars::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 8px;
+        height: 2px;
+        background: currentColor;
+        box-shadow: 0 4px 0 currentColor, 0 8px 0 currentColor;
+        opacity: 0.9;
+      }
+
+      .tlr-sort-glyph-arrows {
+        position: relative;
+        width: 4px;
+        height: 10px;
+      }
+
+      .tlr-sort-glyph-arrows::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        border-left: 2px solid transparent;
+        border-right: 2px solid transparent;
+        border-bottom: 3px solid currentColor;
+        opacity: 0.95;
+      }
+
+      .tlr-sort-glyph-arrows::after {
+        content: '';
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        border-left: 2px solid transparent;
+        border-right: 2px solid transparent;
+        border-top: 3px solid currentColor;
+        opacity: 0.95;
       }
 
       .tlr-sort-menu {
@@ -2174,9 +2242,10 @@ class Plugin extends AppPlugin {
       .tlr-search-wrap {
         display: none;
         align-items: center;
-        gap: 8px;
-        padding: 4px 8px;
-        border: 2px solid var(--border-subtle, rgba(0, 0, 0, 0.12));
+        gap: 6px;
+        padding: 0 8px;
+        min-height: 28px;
+        border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.12));
         border-radius: 10px;
         background: var(--bg-panel, transparent);
       }
@@ -2193,6 +2262,7 @@ class Plugin extends AppPlugin {
       .tlr-search-input {
         width: 220px;
         max-width: 40vw;
+        min-height: 20px;
         border: 0;
         outline: none;
         background: transparent;
