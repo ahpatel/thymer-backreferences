@@ -13,6 +13,7 @@ How it works:
 - Uses the Thymer search index via `data.searchByQuery()` with `@linkto = "<recordGuid>"`.
 - Scans `data.getAllRecords()` and inspects record-link properties to find property references to the current record.
 - Renders property-based references grouped by property name, then renders matching line items grouped by source record.
+- Supports in-footer sorting with page-level preferences saved locally per record.
 
 ## Setup
 
@@ -29,6 +30,8 @@ Note: This plugin injects its own CSS at runtime; no `plugin.css` is needed.
 - Scroll to the bottom of a page to see **Linked References**.
 - If other records link to this record via a record-link property, you'll also see **Property References** grouped as "[Property] in...".
 - Click the search icon in the footer header to filter + highlight matches across Property References (record titles) and Linked References (line text).
+- Click the sort icon (right of search) to choose ordering and Asc/Desc direction.
+  - Sort By: `Page Last Edited` (default), `Reference Activity`, `Reference Count`, `Page Title`, `Page Created Date`
 - Click a property group header to collapse/expand it (saved locally).
 - Click a record header to open the source record.
 - Click a reference line to open the source record and (best-effort) focus that line.
@@ -45,6 +48,22 @@ Edit `custom` in `plugin.json`:
 - `maxResults` (number): cap for search results (SDK default is 100; plugin defaults to 200)
 - `collapsedByDefault` (boolean): start the footer collapsed
 - `showSelf` (boolean): include references from the current record (default false)
+
+## Sort Persistence (v1)
+
+Current behavior:
+
+- Sort choice is saved per page (record GUID) in browser `localStorage`.
+- This keeps the preference personal and avoids changing shared workspace behavior in multiplayer setups.
+
+Tradeoff:
+
+- Preferences are local to the device/browser profile (not synced across devices).
+
+Planned follow-up ideas (not in v1):
+
+- Add an optional toggle to sync sort settings into workspace plugin config (shared across devices/users).
+- Add an option to change the default sort behavior from plugin settings.
 
 ## UI Animation Notes
 
@@ -91,3 +110,5 @@ Decision:
 4. Use Command Palette: `Backreferences: Refresh (Active Page)` and confirm linked reference results render and are grouped by source record.
 5. Click a source record header and confirm it navigates to that record.
 6. Ctrl/Cmd-click a source record header and confirm it opens in a new panel.
+7. Open sort menu, switch sort mode and direction, and confirm order updates immediately.
+8. Navigate away and back to the same page and confirm sort preference is restored.
