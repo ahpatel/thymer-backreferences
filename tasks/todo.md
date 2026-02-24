@@ -24,3 +24,21 @@ Goal: Add sortable backreferences with per-page saved preferences in local stora
   - `node -e "const fs=require('fs'); const src=fs.readFileSync('plugin.js','utf8'); new Function(src);"` (syntax parse)
   - Node sanity check with stubbed `AppPlugin` for sort helper methods.
   - Manual Thymer UI checks still required for final visual/interaction confirmation.
+
+---
+
+# 2026-02-23: Install/Update Troubleshooting Docs
+
+Goal: Clarify manual copy/paste install behavior so users do not need a "weird save order" workaround.
+
+## Plan
+
+- [x] Compare install order guidance across SDK/examples and current README
+- [x] Identify ambiguity in Backreferences setup instructions
+- [x] Add explicit install/update note (paste order not required; save after both tabs)
+- [x] Add troubleshooting section with known recovery steps
+
+## Review
+
+- SDK/examples use mixed orders (config->code and code->config), indicating no strict order dependency.
+- Updated README to reduce ambiguity and document reliable update recovery flow (re-paste both, save once, disable/enable, refresh).

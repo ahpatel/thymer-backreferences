@@ -21,9 +21,29 @@ How it works:
 2. Create (or open) a **Global Plugin**
 3. Paste `plugin.json` into Configuration
 4. Paste `plugin.js` into Custom Code
-5. Save
+5. Save once after both tabs are updated
 
 Note: This plugin injects its own CSS at runtime; no `plugin.css` is needed.
+
+Install/update note:
+
+- Paste order (Configuration vs Custom Code) does **not** matter.
+- What matters is that both are updated before you click **Save**.
+- Avoid saving after updating only one tab during upgrades, because that can briefly run mismatched code/config.
+
+## Troubleshooting Install/Update
+
+If Backreferences does not appear or behaves oddly after a manual paste/update:
+
+1. Confirm plugin type is **Global Plugin**.
+2. Open the same Backreferences plugin entry (avoid duplicate plugins with similar names).
+3. Re-paste both files (`plugin.json` + `plugin.js`) and click **Save** once.
+4. Disable the plugin, wait 2-3 seconds, then re-enable it.
+5. If still stale, refresh the Thymer tab.
+
+Common paste error:
+
+- If you see syntax errors about `import` or `export`, make sure you pasted plain plugin code into Thymer's Custom Code field (`class Plugin ...`, no `import`/`export`).
 
 ## Usage
 
