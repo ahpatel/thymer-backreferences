@@ -7,12 +7,12 @@ class Plugin extends AppPlugin {
     this._panelStates = new Map();
     this._eventHandlerIds = [];
 
-    this._storageKeyCollapsed = 'thymer_backreferences_collapsed_v1';
-    this._legacyStorageKeyCollapsed = 'thymer_backlinks_collapsed_v1';
+    this._storageKeyCollapsed = 'thymer_backreferences_collapsed_v2';
+    this._legacyStorageKeyCollapsed = null;
     this._collapsed = this.loadCollapsedSetting();
 
-    this._storageKeyPropGroupCollapsed = 'thymer_backreferences_prop_group_collapsed_v1';
-    this._legacyStorageKeyPropGroupCollapsed = 'thymer_backlinks_prop_group_collapsed_v1';
+    this._storageKeyPropGroupCollapsed = 'thymer_backreferences_prop_group_collapsed_v2';
+    this._legacyStorageKeyPropGroupCollapsed = null;
     this._propGroupCollapsed = this.loadPropGroupCollapsedSetting();
 
     this._defaultSortBy = 'page_last_edited';
@@ -55,6 +55,10 @@ class Plugin extends AppPlugin {
 
     const panel = this.ui.getActivePanel();
     if (panel) this.handlePanelChanged(panel, 'initial');
+    setTimeout(() => {
+      const p = this.ui.getActivePanel();
+      if (p) this.handlePanelChanged(p, 'initial-delayed');
+    }, 250);
   }
 
   onUnload() {
@@ -83,6 +87,12 @@ class Plugin extends AppPlugin {
 
     const panelEl = panel?.getElement?.() || null;
     if (this.shouldSuppressInPanel(panel, panelEl)) {
+      this.disposePanelState(panelId);
+      return;
+    }
+
+    const mountContainer = this.findMountContainer(panelEl);
+    if (!mountContainer) {
       this.disposePanelState(panelId);
       return;
     }
@@ -120,19 +130,12 @@ class Plugin extends AppPlugin {
     const nav = panel?.getNavigation?.() || null;
     const navType = nav && typeof nav.type === 'string' ? nav.type.trim() : '';
 
-    // Backreferences should only render inside editable record panels.
-    // Custom plugin panels (opened via navigateToCustomType) and other non-edit
-    // views should not show this footer.
-    if (navType && navType !== 'edit_panel') return true;
+    // Keep suppression conservative: nav.type labels can vary across builds.
+    // We only hard-suppress known custom panel nav types. Other panel kinds are
+    // filtered by mount-container detection and active-record checks.
+    if (navType === 'custom' || navType === 'custom_panel') return true;
 
-    const hasEditorContainer = !!(
-      panelEl?.querySelector?.('.page-content') ||
-      panelEl?.querySelector?.('.editor-wrapper') ||
-      panelEl?.querySelector?.('#editor')
-    );
-
-    // If there is no standard editor mount point, treat it as a non-record view.
-    return !hasEditorContainer;
+    return false;
   }
 
   handlePanelClosed(panel) {
@@ -279,24 +282,32 @@ class Plugin extends AppPlugin {
   }
 
   findMountContainer(panelEl) {
-    return (
-      panelEl.querySelector?.('.page-content') ||
-      panelEl.querySelector?.('.editor-wrapper') ||
-      panelEl.querySelector?.('#editor') ||
-      null
-    );
+    return this.findMountContainerDetails(panelEl).element || null;
+  }
+
+  findMountContainerDetails(panelEl) {
+    if (!panelEl) return { element: null, selector: null };
+
+    const checks = ['.page-content', '.editor-wrapper', '.editor-panel', '#editor'];
+    for (const selector of checks) {
+      if (panelEl?.matches?.(selector)) return { element: panelEl, selector };
+      const child = panelEl.querySelector?.(selector) || null;
+      if (child) return { element: child, selector };
+    }
+
+    return { element: null, selector: null };
   }
 
   buildFooterRoot(state) {
     const root = document.createElement('div');
-    root.className = 'tlr-footer';
+    root.className = 'tlr-footer form-field-group';
     root.dataset.panelId = state.panelId;
 
     const header = document.createElement('div');
     header.className = 'tlr-header';
 
     const toggleBtn = document.createElement('button');
-    toggleBtn.className = 'tlr-btn tlr-toggle';
+    toggleBtn.className = 'tlr-btn tlr-toggle button-none button-small button-minimal-hover';
     toggleBtn.type = 'button';
     toggleBtn.dataset.action = 'toggle';
     toggleBtn.title = 'Collapse/expand';
@@ -307,7 +318,7 @@ class Plugin extends AppPlugin {
     title.textContent = 'Backreferences';
 
     const count = document.createElement('div');
-    count.className = 'tlr-count';
+    count.className = 'tlr-count text-details';
     count.dataset.role = 'count';
     count.textContent = '';
 
@@ -315,7 +326,7 @@ class Plugin extends AppPlugin {
     spacer.className = 'tlr-spacer';
 
     const searchToggle = document.createElement('button');
-    searchToggle.className = 'tlr-btn tlr-search-toggle';
+    searchToggle.className = 'tlr-btn tlr-search-toggle button-none button-small button-minimal-hover';
     searchToggle.type = 'button';
     searchToggle.dataset.action = 'toggle-search';
     searchToggle.title = 'Filter references';
@@ -327,7 +338,7 @@ class Plugin extends AppPlugin {
     }
 
     const searchWrap = document.createElement('div');
-    searchWrap.className = 'tlr-search-wrap';
+    searchWrap.className = 'tlr-search-wrap query-input';
 
     const searchIcon = document.createElement('div');
     searchIcon.className = 'tlr-search-icon';
@@ -338,8 +349,9 @@ class Plugin extends AppPlugin {
     }
 
     const input = document.createElement('input');
-    input.className = 'tlr-search-input';
+    input.className = 'tlr-search-input query-input--field form-input';
     input.type = 'text';
+    input.name = 'backreferences-filter';
     input.placeholder = 'Filter references...';
     input.autocomplete = 'off';
     input.spellcheck = false;
@@ -371,7 +383,7 @@ class Plugin extends AppPlugin {
     });
 
     const clearBtn = document.createElement('button');
-    clearBtn.className = 'tlr-search-clear';
+    clearBtn.className = 'tlr-search-clear button-none button-small button-minimal-hover';
     clearBtn.type = 'button';
     clearBtn.dataset.action = 'clear-search';
     clearBtn.title = 'Clear';
@@ -385,7 +397,7 @@ class Plugin extends AppPlugin {
     sortWrap.className = 'tlr-sort-wrap';
 
     const sortToggle = document.createElement('button');
-    sortToggle.className = 'tlr-btn tlr-sort-toggle';
+    sortToggle.className = 'tlr-btn tlr-sort-toggle button-none button-small button-minimal-hover';
     sortToggle.type = 'button';
     sortToggle.dataset.action = 'toggle-sort-menu';
     sortToggle.setAttribute('aria-haspopup', 'menu');
@@ -403,7 +415,7 @@ class Plugin extends AppPlugin {
     sortToggle.appendChild(sortGlyph);
 
     const sortMenu = document.createElement('div');
-    sortMenu.className = 'tlr-sort-menu';
+    sortMenu.className = 'tlr-sort-menu cmdpal--inline dropdown active focused-component';
     sortMenu.setAttribute('role', 'menu');
 
     sortWrap.appendChild(sortToggle);
@@ -695,14 +707,14 @@ class Plugin extends AppPlugin {
     menu.innerHTML = '';
 
     const title = document.createElement('div');
-    title.className = 'tlr-sort-menu-title';
+    title.className = 'tlr-sort-menu-title text-details';
     title.textContent = 'Sort By';
     menu.appendChild(title);
 
     for (const option of this.getSortOptions()) {
       const row = document.createElement('button');
       row.type = 'button';
-      row.className = 'tlr-sort-option';
+      row.className = 'tlr-sort-option button-normal button-normal-hover';
       row.dataset.action = 'set-sort-by';
       row.dataset.sortBy = option.id;
       if (option.id === sortBy) row.classList.add('is-active');
@@ -724,7 +736,7 @@ class Plugin extends AppPlugin {
 
     const ascBtn = document.createElement('button');
     ascBtn.type = 'button';
-    ascBtn.className = 'tlr-sort-dir-btn';
+    ascBtn.className = 'tlr-sort-dir-btn button-normal button-normal-hover button-small';
     ascBtn.dataset.action = 'set-sort-dir';
     ascBtn.dataset.sortDir = 'asc';
     ascBtn.textContent = 'Ascending';
@@ -732,7 +744,7 @@ class Plugin extends AppPlugin {
 
     const descBtn = document.createElement('button');
     descBtn.type = 'button';
-    descBtn.className = 'tlr-sort-dir-btn';
+    descBtn.className = 'tlr-sort-dir-btn button-normal button-normal-hover button-small';
     descBtn.dataset.action = 'set-sort-dir';
     descBtn.dataset.sortDir = 'desc';
     descBtn.textContent = 'Descending';
@@ -781,13 +793,16 @@ class Plugin extends AppPlugin {
     if (state.sortMenuOpen !== true) return;
 
     const onOutsideMouseDown = (ev) => {
-      const root = state.rootEl || null;
-      if (!root || !root.isConnected) {
+      const menu = state.sortMenuEl || null;
+      const toggle = state.sortToggleEl || null;
+      if (!menu || !menu.isConnected) {
         this.setSortMenuOpen(state, false);
         return;
       }
 
-      if (root.contains(ev.target)) return;
+      const target = ev.target;
+      if (menu.contains(target)) return;
+      if (toggle && toggle.contains(target)) return;
       this.setSortMenuOpen(state, false);
     };
 
@@ -840,8 +855,7 @@ class Plugin extends AppPlugin {
       // ignore
     }
 
-    const cfg = this.getConfiguration?.() || {};
-    return cfg.custom?.collapsedByDefault === true;
+    return false;
   }
 
   saveCollapsedSetting(collapsed) {
@@ -1012,7 +1026,8 @@ class Plugin extends AppPlugin {
   scheduleRefreshForPanel(panel, { force, reason }) {
     const panelId = panel?.getId?.() || null;
     if (!panelId) return;
-    const state = this._panelStates.get(panelId) || null;
+    let state = this._panelStates.get(panelId) || null;
+    if (!state) state = this.getOrCreatePanelState(panel);
     if (!state) return;
 
     if (state.refreshTimer) {
@@ -1631,7 +1646,7 @@ class Plugin extends AppPlugin {
   appendSectionTitle(container, text) {
     if (!container) return;
     const el = document.createElement('div');
-    el.className = 'tlr-section-title';
+    el.className = 'tlr-section-title text-details';
     el.textContent = text || '';
     container.appendChild(el);
   }
@@ -1670,7 +1685,7 @@ class Plugin extends AppPlugin {
 
       const header = document.createElement('button');
       header.type = 'button';
-      header.className = 'tlr-prop-header';
+      header.className = 'tlr-prop-header button-normal button-normal-hover';
       header.dataset.action = 'toggle-prop-group';
       header.dataset.propName = propName;
       header.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
@@ -1684,7 +1699,7 @@ class Plugin extends AppPlugin {
       title.textContent = `${propName} in...`;
 
       const meta = document.createElement('div');
-      meta.className = 'tlr-prop-meta';
+      meta.className = 'tlr-prop-meta text-details';
       meta.textContent = `${g?.records?.length || 0}`;
 
       header.appendChild(caret);
@@ -1700,7 +1715,7 @@ class Plugin extends AppPlugin {
 
         const btn = document.createElement('button');
         btn.type = 'button';
-        btn.className = 'tlr-prop-record';
+        btn.className = 'tlr-prop-record button-none button-minimal-hover';
         btn.dataset.action = 'open-record';
         btn.dataset.recordGuid = guid;
         const name = r.getName?.() || 'Untitled';
@@ -1744,7 +1759,7 @@ class Plugin extends AppPlugin {
 
       const header = document.createElement('button');
       header.type = 'button';
-      header.className = 'tlr-group-header';
+      header.className = 'tlr-group-header button-normal button-normal-hover';
       header.dataset.action = 'open-record';
       header.dataset.recordGuid = recordGuid;
 
@@ -1753,7 +1768,7 @@ class Plugin extends AppPlugin {
       title.textContent = record.getName?.() || 'Untitled';
 
       const meta = document.createElement('div');
-      meta.className = 'tlr-group-meta';
+      meta.className = 'tlr-group-meta text-details';
       meta.textContent = `${g.lines.length}`;
 
       header.appendChild(title);
@@ -1765,7 +1780,7 @@ class Plugin extends AppPlugin {
       for (const line of g.lines || []) {
         const lineEl = document.createElement('button');
         lineEl.type = 'button';
-        lineEl.className = 'tlr-line';
+        lineEl.className = 'tlr-line button-none button-minimal-hover';
         lineEl.dataset.action = 'open-line';
         lineEl.dataset.recordGuid = recordGuid;
         lineEl.dataset.lineGuid = line.guid;
@@ -2048,9 +2063,7 @@ class Plugin extends AppPlugin {
   injectCss() {
     this.ui.injectCSS(`
       .tlr-footer {
-        margin-top: 24px;
-        padding-top: 16px;
-        border-top: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.12));
+        margin-top: 16px;
         color: var(--text, inherit);
         font-size: 13px;
       }
@@ -2060,7 +2073,7 @@ class Plugin extends AppPlugin {
         align-items: center;
         gap: 8px;
         min-height: 30px;
-        margin-bottom: 12px;
+        margin-bottom: 10px;
       }
 
       .tlr-title {
@@ -2087,20 +2100,8 @@ class Plugin extends AppPlugin {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.12));
-        background: var(--bg-panel, transparent);
-        color: var(--text, inherit);
-        padding: 4px 8px;
-        border-radius: 8px;
-        cursor: pointer;
-        font-size: 12px;
         line-height: 1;
-        min-height: 30px;
         box-sizing: border-box;
-      }
-
-      .tlr-btn:hover {
-        background: var(--bg-hover, rgba(0, 0, 0, 0.04));
       }
 
       .tlr-search-toggle {
@@ -2183,12 +2184,13 @@ class Plugin extends AppPlugin {
         top: calc(100% + 6px);
         right: 0;
         min-width: 260px;
-        padding: 8px;
-        border-radius: 12px;
-        border: 1px solid var(--cmdpal-border-color, var(--border-subtle, rgba(0, 0, 0, 0.12)));
-        background: var(--cmdpal-bg-color, var(--bg-panel, rgba(22, 26, 24, 0.96)));
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
-        z-index: 20;
+        max-width: min(90vw, 340px);
+        padding: 6px;
+        border-radius: 5px;
+        border: 1px solid var(--cmdpal-border-color, var(--divider-color, var(--border-subtle, rgba(0, 0, 0, 0.12))));
+        background: var(--cmdpal-bg-color, var(--panel-bg-color, var(--bg-default, var(--bg-panel, rgba(22, 26, 24, 0.96)))));
+        box-shadow: var(--cmdpal-box-shadow, 0 12px 34px rgba(0, 0, 0, 0.18));
+        z-index: 120;
       }
 
       .tlr-sort-open .tlr-sort-menu {
@@ -2196,34 +2198,19 @@ class Plugin extends AppPlugin {
       }
 
       .tlr-sort-menu-title {
+        margin: 2px 6px 6px;
         font-size: 11px;
-        font-weight: 700;
-        color: var(--text-muted, rgba(0, 0, 0, 0.6));
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        margin: 2px 4px 6px;
       }
 
       .tlr-sort-option {
         width: 100%;
-        border: 1px solid transparent;
-        border-radius: 9px;
-        background: transparent;
-        color: var(--text, inherit);
-        padding: 8px 12px;
         display: flex;
         align-items: center;
         line-height: 1.35;
         text-align: left;
-        cursor: pointer;
-      }
-
-      .tlr-sort-option:hover {
-        background: var(--cmdpal-hover-bg-color, var(--bg-hover, rgba(0, 0, 0, 0.04)));
       }
 
       .tlr-sort-option.is-active {
-        border-color: var(--cmdpal-selected-bg-color, var(--cmdpal-border-color, var(--border-subtle, rgba(0, 0, 0, 0.12))));
         background: var(--cmdpal-selected-bg-color, var(--bg-hover, rgba(0, 0, 0, 0.04)));
         color: var(--cmdpal-selected-fg-color, var(--text, inherit));
       }
@@ -2239,41 +2226,29 @@ class Plugin extends AppPlugin {
 
       .tlr-sort-dir-row {
         display: flex;
-        gap: 10px;
+        gap: 8px;
       }
 
       .tlr-sort-dir-btn {
         flex: 1 1 auto;
-        border: 1px solid var(--cmdpal-border-color, var(--border-subtle, rgba(0, 0, 0, 0.12)));
-        border-radius: 8px;
-        background: transparent;
-        color: var(--text, inherit);
-        padding: 7px 10px;
-        cursor: pointer;
-        text-align: center;
-        min-height: 30px;
-      }
-
-      .tlr-sort-dir-btn:hover {
-        background: var(--cmdpal-hover-bg-color, var(--bg-hover, rgba(0, 0, 0, 0.04)));
+        justify-content: center;
       }
 
       .tlr-sort-dir-btn.is-active {
         background: var(--cmdpal-selected-bg-color, var(--bg-hover, rgba(0, 0, 0, 0.04)));
         color: var(--cmdpal-selected-fg-color, var(--text, inherit));
-        border-color: var(--cmdpal-selected-bg-color, var(--cmdpal-border-color, var(--border-subtle, rgba(0, 0, 0, 0.12))));
       }
 
       .tlr-search-wrap {
         display: none;
         align-items: center;
-        gap: 8px;
-        padding: 0 10px;
+        gap: 6px;
+        padding: 0 8px;
         height: 30px;
         min-height: 30px;
-        border: 1px solid var(--cmdpal-border-color, var(--border-subtle, rgba(0, 0, 0, 0.12)));
-        border-radius: 10px;
-        background: var(--cmdpal-bg-color, var(--bg-panel, transparent));
+        border: 1px solid var(--input-border-color, var(--divider-color, var(--cmdpal-border-color, var(--border-subtle, rgba(0, 0, 0, 0.12)))));
+        border-radius: 3px;
+        background: var(--input-bg-color, var(--cmdpal-input-bg-color, var(--bg-panel, transparent)));
         box-sizing: border-box;
       }
 
@@ -2294,9 +2269,13 @@ class Plugin extends AppPlugin {
         border: 0;
         outline: none;
         background: transparent;
-        color: var(--text, inherit);
-        font-size: 12px;
+        color: var(--input-fg-color, var(--text-default, var(--text, inherit)));
+        -webkit-text-fill-color: var(--input-fg-color, var(--text-default, var(--text, inherit)));
+        caret-color: var(--input-fg-color, var(--text-default, var(--text, inherit)));
+        opacity: 1;
+        font-size: 13px;
         line-height: 20px;
+        padding: 0;
       }
 
       .tlr-search-input::placeholder {
@@ -2304,18 +2283,9 @@ class Plugin extends AppPlugin {
       }
 
       .tlr-search-clear {
-        border: 0;
-        outline: none;
-        background: transparent;
+        min-width: 20px;
+        padding: 0 4px;
         color: var(--text-muted, rgba(0, 0, 0, 0.6));
-        cursor: pointer;
-        padding: 2px 8px;
-        border-radius: 8px;
-      }
-
-      .tlr-search-clear:hover {
-        background: var(--cmdpal-hover-bg-color, var(--bg-hover, rgba(0, 0, 0, 0.04)));
-        color: var(--text, inherit);
       }
 
       .tlr-toggle {
@@ -2334,21 +2304,22 @@ class Plugin extends AppPlugin {
       .tlr-error {
         color: var(--text-muted, rgba(0, 0, 0, 0.6));
         padding: 8px 0;
+        font-size: 12px;
       }
 
       .tlr-section-title {
         margin-top: 16px;
         margin-bottom: 8px;
-        font-size: 11px;
-        font-weight: 700;
+        font-size: 12px;
+        font-weight: 650;
         color: var(--text-muted, rgba(0, 0, 0, 0.6));
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
+        text-transform: none;
+        letter-spacing: 0;
       }
 
       .tlr-divider {
         margin: 14px 0 10px;
-        border-top: 2px solid var(--border-subtle, rgba(0, 0, 0, 0.12));
+        border-top: 1px solid var(--divider-color, var(--border-subtle, rgba(0, 0, 0, 0.12)));
       }
 
       .tlr-prop-group { margin: 12px 0 16px; }
@@ -2360,15 +2331,7 @@ class Plugin extends AppPlugin {
         gap: 10px;
         width: 100%;
         padding: 8px 10px;
-        border-radius: 10px;
-        border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.12));
-        background: var(--bg-panel, transparent);
-        cursor: pointer;
         text-align: left;
-      }
-
-      .tlr-prop-header:hover {
-        background: var(--bg-hover, rgba(0, 0, 0, 0.04));
       }
 
       .tlr-prop-caret {
@@ -2395,7 +2358,8 @@ class Plugin extends AppPlugin {
         font-weight: 600;
         overflow: hidden;
         text-overflow: ellipsis;
-        white-space: nowrap;
+        white-space: normal;
+        overflow-wrap: anywhere;
         flex: 1 1 auto;
         min-width: 0;
       }
@@ -2410,20 +2374,18 @@ class Plugin extends AppPlugin {
       .tlr-prop-records { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 
       .tlr-prop-record {
+        display: block;
         width: 100%;
-        border: 1px solid transparent;
-        background: transparent;
         padding: 8px 10px;
-        border-radius: 10px;
-        cursor: pointer;
         text-align: left;
         color: var(--ed-link-color, var(--link-color, var(--accent, inherit)));
         line-height: 1.4;
+        white-space: normal;
+        word-break: break-word;
+        overflow-wrap: anywhere;
       }
 
       .tlr-prop-record:hover {
-        border-color: var(--border-subtle, rgba(0, 0, 0, 0.12));
-        background: var(--bg-hover, rgba(0, 0, 0, 0.04));
         color: var(--ed-link-hover-color, var(--link-hover-color, var(--ed-link-color, var(--link-color, var(--accent, inherit)))));
         text-decoration: underline;
       }
@@ -2437,22 +2399,16 @@ class Plugin extends AppPlugin {
         justify-content: space-between;
         gap: 10px;
         padding: 8px 10px;
-        border-radius: 10px;
-        border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.12));
-        background: var(--bg-panel, transparent);
-        cursor: pointer;
         text-align: left;
-      }
-
-      .tlr-group-header:hover {
-        background: var(--bg-hover, rgba(0, 0, 0, 0.04));
       }
 
       .tlr-group-title {
         font-weight: 600;
         overflow: hidden;
         text-overflow: ellipsis;
-        white-space: nowrap;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        line-height: 1.35;
       }
 
       .tlr-group-meta {
@@ -2464,20 +2420,12 @@ class Plugin extends AppPlugin {
       .tlr-lines { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 
       .tlr-line {
+        display: block;
         width: 100%;
-        border: 1px solid transparent;
-        background: transparent;
         padding: 8px 10px;
-        border-radius: 10px;
-        cursor: pointer;
         text-align: left;
         color: var(--text, inherit);
         line-height: 1.35;
-      }
-
-      .tlr-line:hover {
-        border-color: var(--border-subtle, rgba(0, 0, 0, 0.12));
-        background: var(--bg-hover, rgba(0, 0, 0, 0.04));
       }
 
       .tlr-prefix {
@@ -2501,9 +2449,9 @@ class Plugin extends AppPlugin {
       .tlr-seg-link { color: var(--ed-link-color, var(--link-color, var(--accent, inherit))); text-decoration: underline; }
       .tlr-seg-link:visited { color: var(--ed-link-color, var(--link-color, var(--accent, inherit))); }
       .tlr-seg-link:hover { color: var(--ed-link-hover-color, var(--link-hover-color, var(--ed-link-color, var(--link-color, var(--accent, inherit))))); }
-      .tlr-seg-hashtag { color: var(--accent, #2b6cb0); }
-      .tlr-seg-datetime { color: var(--accent, #2b6cb0); }
-      .tlr-seg-mention { color: var(--accent, #2b6cb0); }
+      .tlr-seg-hashtag { color: var(--ed-link-color, var(--link-color, var(--accent, inherit))); }
+      .tlr-seg-datetime { color: var(--ed-link-color, var(--link-color, var(--accent, inherit))); }
+      .tlr-seg-mention { color: var(--ed-link-color, var(--link-color, var(--accent, inherit))); }
       .tlr-seg-ref { color: var(--ed-link-color, var(--link-color, var(--accent, inherit))); cursor: pointer; text-decoration: underline; }
       .tlr-seg-ref:hover { color: var(--ed-link-hover-color, var(--link-hover-color, var(--ed-link-color, var(--link-color, var(--accent, inherit))))); }
 
@@ -2512,6 +2460,8 @@ class Plugin extends AppPlugin {
         color: inherit;
         padding: 0 1px;
         border-radius: 4px;
+        display: inline;
+        line-height: inherit;
       }
 
       .tlr-loading .tlr-search-toggle { opacity: 0.6; cursor: default; }
