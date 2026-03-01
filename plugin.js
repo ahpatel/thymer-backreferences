@@ -81,6 +81,12 @@ class Plugin extends AppPlugin {
     const panelId = panel?.getId?.() || null;
     if (!panelId) return;
 
+    const panelEl = panel?.getElement?.() || null;
+    if (this.shouldSuppressInPanel(panel, panelEl)) {
+      this.disposePanelState(panelId);
+      return;
+    }
+
     const record = panel?.getActiveRecord?.() || null;
     const recordGuid = record?.guid || null;
 
@@ -108,6 +114,25 @@ class Plugin extends AppPlugin {
       force: recordChanged,
       reason: reason || (recordChanged ? 'record-changed' : 'record-same')
     });
+  }
+
+  shouldSuppressInPanel(panel, panelEl) {
+    const nav = panel?.getNavigation?.() || null;
+    const navType = nav && typeof nav.type === 'string' ? nav.type.trim() : '';
+
+    // Backreferences should only render inside editable record panels.
+    // Custom plugin panels (opened via navigateToCustomType) and other non-edit
+    // views should not show this footer.
+    if (navType && navType !== 'edit_panel') return true;
+
+    const hasEditorContainer = !!(
+      panelEl?.querySelector?.('.page-content') ||
+      panelEl?.querySelector?.('.editor-wrapper') ||
+      panelEl?.querySelector?.('#editor')
+    );
+
+    // If there is no standard editor mount point, treat it as a non-record view.
+    return !hasEditorContainer;
   }
 
   handlePanelClosed(panel) {
@@ -258,7 +283,7 @@ class Plugin extends AppPlugin {
       panelEl.querySelector?.('.page-content') ||
       panelEl.querySelector?.('.editor-wrapper') ||
       panelEl.querySelector?.('#editor') ||
-      panelEl
+      null
     );
   }
 
