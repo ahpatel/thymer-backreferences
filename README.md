@@ -3,7 +3,7 @@
 When you are writing a note, one of the first questions is: where else is this referenced?
 Backreferences solves that problem by adding an always-available references panel to the active note, so you can quickly see incoming mentions and navigate to context.
 
-A backlink is a link from another note to the note you are currently viewing. This plugin shows both classic linked mentions and property-based references.
+A backreference is a link from another note to the note you are currently viewing. This plugin shows both classic linked mentions and property-based references.
 
 Built for [Thymer](https://thymer.com/) using the [Thymer Plugin SDK](https://github.com/thymerapp/thymer-plugin-sdk).
 
@@ -13,9 +13,9 @@ Built for [Thymer](https://thymer.com/) using the [Thymer Plugin SDK](https://gi
 
 ## Use Case
 
-Backlinks are useful for finding notes that reference the note you are writing.
+Backreferences are useful for finding notes that reference the note you are writing.
 
-With Backreferences, you can see all backlinks for the active note in one place, plus places where your note is referenced as a property value in other notes (grouped by property itself, shown as `Property in...`).
+With Backreferences, you can see all references for the active note in one place, plus places where your note is referenced as a property value in other notes (grouped by property itself, shown as `Property in...`).
 
 ## What It Shows
 
