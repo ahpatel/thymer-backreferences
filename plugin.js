@@ -1,7 +1,7 @@
 class Plugin extends AppPlugin {
   onLoad() {
     // NOTE: Thymer strips top-level code outside the Plugin class.
-    this._version = '0.4.4';
+    this._version = '0.4.3';
     this._pluginName = 'Backreferences';
 
     this._panelStates = new Map();
@@ -2559,14 +2559,10 @@ class Plugin extends AppPlugin {
         lineEl.dataset.lineGuid = line.guid;
         this.appendLineText(lineEl, line, query);
         this.appendLiveBadges(lineEl, state, this.getLinkedSnapshotKey(line.guid));
-
-        const mainRowEl = document.createElement('div');
-        mainRowEl.className = 'tlr-line-main';
-        mainRowEl.appendChild(lineEl);
-        entryEl.appendChild(mainRowEl);
+        entryEl.appendChild(lineEl);
 
         if (state && ctx) {
-          mainRowEl.appendChild(this.buildLinkedContextControls(line.guid, ctx));
+          entryEl.appendChild(this.buildLinkedContextControls(line.guid, ctx));
 
           if (ctx.loading === true) {
             const loadingEl = document.createElement('div');
@@ -3383,16 +3379,9 @@ class Plugin extends AppPlugin {
         gap: 4px;
       }
 
-      .tlr-line-main {
-        display: flex;
-        align-items: flex-start;
-        gap: 4px;
-      }
-
       .tlr-line {
         display: block;
-        flex: 1 1 auto;
-        min-width: 0;
+        width: 100%;
         padding: 8px 10px;
         text-align: left;
         color: var(--text, inherit);
@@ -3413,10 +3402,7 @@ class Plugin extends AppPlugin {
         display: flex;
         flex-wrap: wrap;
         gap: 4px;
-        flex: 0 0 auto;
-        align-items: center;
-        margin-left: auto;
-        padding: 8px 10px 0 0;
+        padding: 0 10px 2px;
       }
 
       .tlr-context-btn {
