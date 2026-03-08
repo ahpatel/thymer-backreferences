@@ -1,7 +1,7 @@
 class Plugin extends AppPlugin {
   onLoad() {
     // NOTE: Thymer strips top-level code outside the Plugin class.
-    this._version = '0.4.15';
+    this._version = '0.4.16';
     this._pluginName = 'Backreferences';
 
     this._panelStates = new Map();
@@ -30,6 +30,20 @@ class Plugin extends AppPlugin {
     this._refreshDebounceMs = 350;
     this._queryFilterDebounceMs = 180;
     this._queryFilterMaxResults = 1000;
+    this._queryAutocompleteCatalog = null;
+    this._queryAutocompleteCatalogPromise = null;
+    this._queryStandaloneFilters = [
+      'task', 'todo', 'done', 'due', 'overdue', 'assigned', 'unassigned', 'scheduled',
+      'inprogress', 'wip', 'waiting', 'billing', 'important', 'discuss', 'alert', 'starred',
+      'document', 'page', 'record', 'heading', 'text', 'quote', 'list', 'image', 'file',
+      'me', 'mention', 'today', 'tomorrow', 'yesterday', 'thisweek', 'nextweek', 'lastweek',
+      'thismonth', 'thisyear'
+    ];
+    this._queryBuiltInKeys = [
+      'created_at', 'modified_at', 'created_by', 'modified_by', 'text', 'type', 'date',
+      'due', 'time', 'mention', 'scheduled', 'hashtag', 'link', 'collection', 'guid',
+      'pguid', 'rguid', 'backref', 'linkto'
+    ];
     this._legacyIgnoreMetaKey = 'plugin.refs.v1.ignore';
     this._storageKeyIgnoreCleanupDone = 'thymer_backreferences_ignore_cleanup_v1';
     this._ignoreCleanupPromise = null;
@@ -157,6 +171,9 @@ class Plugin extends AppPlugin {
       state.linkedContextByLine = new Map();
       state.filterMetaLoading = false;
       state.filterMenuOpen = false;
+      state.searchAutocompleteItems = [];
+      state.searchAutocompleteSelectedIndex = 0;
+      state.searchAutocompleteOpen = false;
       state.liveBaselineSnapshot = null;
       state.liveCurrentSnapshot = null;
       state.liveNewKeys = new Set();
@@ -220,6 +237,12 @@ class Plugin extends AppPlugin {
         searchToggleEl: null,
         searchWrapEl: null,
         searchInputEl: null,
+        searchAutocompleteEl: null,
+        searchAutocompleteItems: [],
+        searchAutocompleteSelectedIndex: 0,
+        searchAutocompleteOpen: false,
+        searchAutocompleteDismissHandler: null,
+        searchAutocompleteRequestSeq: 0,
         searchQuery: '',
         searchOpen: false,
         filterPreset: this._defaultFilterPreset,
@@ -271,6 +294,12 @@ class Plugin extends AppPlugin {
       searchToggleEl: null,
       searchWrapEl: null,
       searchInputEl: null,
+      searchAutocompleteEl: null,
+      searchAutocompleteItems: [],
+      searchAutocompleteSelectedIndex: 0,
+      searchAutocompleteOpen: false,
+      searchAutocompleteDismissHandler: null,
+      searchAutocompleteRequestSeq: 0,
       searchQuery: '',
       searchOpen: false,
       filterPreset: this._defaultFilterPreset,
@@ -327,6 +356,7 @@ class Plugin extends AppPlugin {
 
     this.setFilterMenuOpen(state, false);
     this.setSortMenuOpen(state, false);
+    this.setSearchAutocompleteOpen(state, false);
 
     try {
       state.rootEl?.remove?.();
@@ -353,6 +383,9 @@ class Plugin extends AppPlugin {
       state.bodyEl = state.rootEl.querySelector('[data-role="body"]');
       state.countEl = state.rootEl.querySelector('[data-role="count"]');
       this.setSearchOpen(state, state.searchOpen === true);
+      this.syncSearchAutocompleteControlState(state);
+      this.renderSearchAutocomplete(state);
+      this.setSearchAutocompleteOpen(state, state.searchAutocompleteOpen === true);
       this.renderFilterMenu(state);
       this.syncFilterControlState(state);
       this.setFilterMenuOpen(state, state.filterMenuOpen === true);
@@ -446,7 +479,7 @@ class Plugin extends AppPlugin {
     input.className = 'tlr-search-input query-input--field form-input';
     input.type = 'text';
     input.name = 'backreferences-filter';
-    input.placeholder = 'Text or query, e.g. @task AND "meeting"';
+    input.placeholder = 'Text or query, e.g. @task or @Project.status = "In progress"';
     input.title = 'Filter backreferences with plain text or Thymer query syntax';
     input.autocomplete = 'off';
     input.spellcheck = false;
@@ -459,6 +492,34 @@ class Plugin extends AppPlugin {
 
     input.addEventListener('keydown', (e) => {
       stopKeys(e);
+      if (state.searchAutocompleteOpen === true) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          this.moveSearchAutocompleteSelection(state, 1);
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          this.moveSearchAutocompleteSelection(state, -1);
+          return;
+        }
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          this.applySelectedSearchAutocompleteItem(state);
+          return;
+        }
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          this.applySelectedSearchAutocompleteItem(state);
+          return;
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          this.setSearchAutocompleteOpen(state, false);
+          return;
+        }
+      }
+
       if (e.key === 'Escape') {
         e.preventDefault();
         const q = (state.searchQuery || '').trim();
@@ -475,15 +536,32 @@ class Plugin extends AppPlugin {
       if (e.key === 'Enter') {
         const mode = this.getSearchMode(state.searchQuery || '');
         if (mode === 'query') {
+          if (this.isIncompleteQueryDraft(state.searchQuery || '')) return;
           e.preventDefault();
           this.scheduleQueryFilterRefresh(state, { immediate: true, reason: 'enter' });
         }
       }
     });
 
+    input.addEventListener('focus', () => {
+      this.updateSearchAutocomplete(state);
+    });
+
+    input.addEventListener('click', () => {
+      this.updateSearchAutocomplete(state);
+    });
+
+    input.addEventListener('keyup', (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === 'Tab' || e.key === 'Escape') {
+        return;
+      }
+      this.updateSearchAutocomplete(state);
+    });
+
     input.addEventListener('input', () => {
       state.searchQuery = input.value;
       this.handleSearchQueryChanged(state, { immediate: false });
+      this.updateSearchAutocomplete(state);
     });
 
     const clearBtn = document.createElement('button');
@@ -493,9 +571,14 @@ class Plugin extends AppPlugin {
     clearBtn.title = 'Clear';
     clearBtn.textContent = 'x';
 
+    const autocomplete = document.createElement('div');
+    autocomplete.className = 'tlr-search-autocomplete cmdpal--inline dropdown active focused-component';
+    autocomplete.setAttribute('role', 'listbox');
+
     searchWrap.appendChild(searchIcon);
     searchWrap.appendChild(input);
     searchWrap.appendChild(clearBtn);
+    searchWrap.appendChild(autocomplete);
 
     const sortWrap = document.createElement('div');
     sortWrap.className = 'tlr-sort-wrap';
@@ -551,6 +634,7 @@ class Plugin extends AppPlugin {
     state.searchToggleEl = null;
     state.searchWrapEl = searchWrap;
     state.searchInputEl = input;
+    state.searchAutocompleteEl = autocomplete;
     return root;
   }
 
@@ -831,6 +915,492 @@ class Plugin extends AppPlugin {
     return 'text';
   }
 
+  getQueryAutocompleteCatalogSync() {
+    return this._queryAutocompleteCatalog || {
+      collections: [],
+      users: []
+    };
+  }
+
+  async ensureQueryAutocompleteCatalog() {
+    if (this._queryAutocompleteCatalog) return this._queryAutocompleteCatalog;
+    if (this._queryAutocompleteCatalogPromise) return this._queryAutocompleteCatalogPromise;
+
+    this._queryAutocompleteCatalogPromise = (async () => {
+      let collections = [];
+      try {
+        collections = await this.data.getAllCollections();
+      } catch (e) {
+        collections = [];
+      }
+
+      const catalogCollections = [];
+      for (const collection of collections || []) {
+        const name = (collection?.getName?.() || '').trim();
+        const guid = (collection?.getGuid?.() || '').trim();
+        if (!name || !guid) continue;
+
+        const config = collection?.getConfiguration?.() || null;
+        const fields = [];
+        for (const field of config?.fields || []) {
+          const label = (field?.label || '').trim();
+          if (!label || field?.active === false) continue;
+          fields.push({
+            id: (field?.id || '').trim(),
+            label,
+            type: (field?.type || '').trim()
+          });
+        }
+
+        fields.sort((a, b) => a.label.localeCompare(b.label));
+        catalogCollections.push({ name, guid, fields });
+      }
+
+      catalogCollections.sort((a, b) => a.name.localeCompare(b.name));
+
+      const catalogUsers = [];
+      for (const user of this.data.getActiveUsers?.() || []) {
+        const name = (user?.getDisplayName?.() || '').trim();
+        const guid = (user?.guid || '').trim();
+        if (!name || !guid) continue;
+        catalogUsers.push({ name, guid });
+      }
+
+      catalogUsers.sort((a, b) => a.name.localeCompare(b.name));
+
+      this._queryAutocompleteCatalog = {
+        collections: catalogCollections,
+        users: catalogUsers
+      };
+      this._queryAutocompleteCatalogPromise = null;
+      return this._queryAutocompleteCatalog;
+    })();
+
+    return this._queryAutocompleteCatalogPromise;
+  }
+
+  quoteQueryIdentifier(name) {
+    const value = String(name || '');
+    return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  }
+
+  formatQueryIdentifier(name) {
+    const value = String(name || '').trim();
+    if (!value) return '';
+    return /^[A-Za-z0-9_]+$/.test(value) ? value : this.quoteQueryIdentifier(value);
+  }
+
+  getBuiltInQueryKeys() {
+    return Array.from(this._queryBuiltInKeys || []);
+  }
+
+  getStandaloneQueryFilters() {
+    return Array.from(this._queryStandaloneFilters || []);
+  }
+
+  isBuiltInQueryKey(name) {
+    const value = String(name || '').trim().toLowerCase();
+    return value ? this._queryBuiltInKeys.includes(value) : false;
+  }
+
+  isQueryOperatorToken(token) {
+    return token === '=' || token === '!=' || token === '<' || token === '<=' || token === '>' || token === '>=';
+  }
+
+  buildSearchAutocompleteItem({ label, icon, detail, insertText, replaceStart, replaceEnd } = {}) {
+    return {
+      label: String(label || ''),
+      icon: icon || null,
+      detail: String(detail || ''),
+      insertText: String(insertText || ''),
+      replaceStart: Number.isFinite(replaceStart) ? replaceStart : 0,
+      replaceEnd: Number.isFinite(replaceEnd) ? replaceEnd : 0
+    };
+  }
+
+  dedupeSearchAutocompleteItems(items) {
+    const out = [];
+    const seen = new Set();
+    for (const item of items || []) {
+      const key = `${item?.label || ''}\n${item?.detail || ''}\n${item?.insertText || ''}\n${item?.replaceStart || 0}\n${item?.replaceEnd || 0}`;
+      if (!item?.label || seen.has(key)) continue;
+      seen.add(key);
+      out.push(item);
+    }
+    return out;
+  }
+
+  parseQueryFieldContext(query, caret) {
+    const before = String(query || '').slice(0, caret);
+    const match = before.match(/(?:^|[\s(])@(?:("(?:[^"\\]|\\.)*"|[A-Za-z0-9_]+))\.((?:"(?:[^"\\]|\\.)*")|[A-Za-z0-9_]*)$/);
+    if (!match) return null;
+    const collectionToken = match[1] || '';
+    const fieldToken = match[2] || '';
+    const replaceEnd = caret;
+    const replaceStart = replaceEnd - fieldToken.length;
+    const rawCollection = collectionToken.startsWith('"') && collectionToken.endsWith('"')
+      ? collectionToken.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+      : collectionToken;
+    const normalizedCollection = rawCollection.trim().toLowerCase();
+    return {
+      collectionToken,
+      collectionName: rawCollection,
+      normalizedCollection,
+      fieldToken,
+      fieldPrefix: fieldToken.startsWith('"') ? fieldToken.slice(1).toLowerCase() : fieldToken.toLowerCase(),
+      replaceStart,
+      replaceEnd
+    };
+  }
+
+  parseQueryOperatorContext(query, caret) {
+    const before = String(query || '').slice(0, caret);
+    const match = before.match(/(?:^|[\s(])@(?:("(?:[^"\\]|\\.)*"|[A-Za-z0-9_]+)(?:\.((?:"(?:[^"\\]|\\.)*")|[A-Za-z0-9_]+))?)\s*$/);
+    if (!match) return null;
+
+    const keyToken = match[1] || '';
+    const fieldToken = match[2] || '';
+    const rawKey = keyToken.startsWith('"') && keyToken.endsWith('"')
+      ? keyToken.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+      : keyToken;
+    if (!fieldToken && !this.isBuiltInQueryKey(rawKey)) return null;
+
+    return {
+      replaceStart: caret,
+      replaceEnd: caret
+    };
+  }
+
+  parseQueryTokenContext(query, caret) {
+    const before = String(query || '').slice(0, caret);
+    const match = before.match(/(?:^|[\s(])@((?:"(?:[^"\\]|\\.)*")|[^\s()]*)$/);
+    if (!match) return null;
+    const token = match[1] || '';
+    if (token.includes('.')) return null;
+    const replaceEnd = caret;
+    const replaceStart = replaceEnd - token.length;
+    const unquoted = token.startsWith('"') ? token.slice(1) : token;
+    return {
+      token,
+      prefix: unquoted.toLowerCase(),
+      replaceStart,
+      replaceEnd,
+      quoted: token.startsWith('"')
+    };
+  }
+
+  getSearchAutocompleteItems(query, caret, catalog) {
+    const items = [];
+    const fieldContext = this.parseQueryFieldContext(query, caret);
+    if (fieldContext) {
+      const collection = (catalog?.collections || []).find((entry) => entry.name.trim().toLowerCase() === fieldContext.normalizedCollection) || null;
+      const exactFieldMatch = (collection?.fields || []).some((field) => field.label.trim().toLowerCase() === fieldContext.fieldPrefix.trim().toLowerCase());
+      const isOpenQuotedField = fieldContext.fieldToken.startsWith('"') && !fieldContext.fieldToken.endsWith('"');
+      if (fieldContext.fieldToken && exactFieldMatch && !isOpenQuotedField) {
+        const operatorItems = [];
+        for (const operator of ['=', '!=', '<=', '>=', '<', '>']) {
+          operatorItems.push(this.buildSearchAutocompleteItem({
+            label: operator,
+            icon: 'ti-math-symbols',
+            detail: 'Operator',
+            insertText: ` ${operator} `,
+            replaceStart: caret,
+            replaceEnd: caret
+          }));
+        }
+        return operatorItems;
+      }
+      for (const field of collection?.fields || []) {
+        if (fieldContext.fieldPrefix && !field.label.toLowerCase().includes(fieldContext.fieldPrefix)) continue;
+        items.push(this.buildSearchAutocompleteItem({
+          label: field.label,
+          icon: 'ti-columns-2',
+          detail: field.type || 'Field',
+          insertText: this.formatQueryIdentifier(field.label),
+          replaceStart: fieldContext.replaceStart,
+          replaceEnd: fieldContext.replaceEnd
+        }));
+      }
+      return this.dedupeSearchAutocompleteItems(items).slice(0, 10);
+    }
+
+    const operatorContext = this.parseQueryOperatorContext(query, caret);
+    if (operatorContext) {
+      for (const operator of ['=', '!=', '<=', '>=', '<', '>']) {
+        items.push(this.buildSearchAutocompleteItem({
+          label: operator,
+          icon: 'ti-math-symbols',
+          detail: 'Operator',
+          insertText: ` ${operator} `,
+          replaceStart: operatorContext.replaceStart,
+          replaceEnd: operatorContext.replaceEnd
+        }));
+      }
+      return items;
+    }
+
+    const tokenContext = this.parseQueryTokenContext(query, caret);
+    if (!tokenContext) return [];
+
+    for (const keyword of this.getStandaloneQueryFilters()) {
+      if (tokenContext.prefix && !keyword.toLowerCase().includes(tokenContext.prefix)) continue;
+      items.push(this.buildSearchAutocompleteItem({
+        label: `@${keyword}`,
+        icon: 'ti-at',
+        detail: 'Filter',
+        insertText: `@${keyword}`,
+        replaceStart: tokenContext.replaceStart,
+        replaceEnd: tokenContext.replaceEnd
+      }));
+    }
+
+    for (const key of this.getBuiltInQueryKeys()) {
+      if (tokenContext.prefix && !key.toLowerCase().includes(tokenContext.prefix)) continue;
+      items.push(this.buildSearchAutocompleteItem({
+        label: `@${key}`,
+        icon: 'ti-key',
+        detail: 'Built-in key',
+        insertText: `@${key}`,
+        replaceStart: tokenContext.replaceStart,
+        replaceEnd: tokenContext.replaceEnd
+      }));
+    }
+
+    for (const user of catalog?.users || []) {
+      if (tokenContext.prefix && !user.name.toLowerCase().includes(tokenContext.prefix)) continue;
+      items.push(this.buildSearchAutocompleteItem({
+        label: `@${user.name}`,
+        icon: 'ti-user',
+        detail: 'User',
+        insertText: `@${this.formatQueryIdentifier(user.name)}`,
+        replaceStart: tokenContext.replaceStart,
+        replaceEnd: tokenContext.replaceEnd
+      }));
+    }
+
+    for (const collection of catalog?.collections || []) {
+      if (tokenContext.prefix && !collection.name.toLowerCase().includes(tokenContext.prefix)) continue;
+      items.push(this.buildSearchAutocompleteItem({
+        label: `@${collection.name}`,
+        icon: 'ti-database',
+        detail: 'Collection',
+        insertText: `@${this.formatQueryIdentifier(collection.name)}`,
+        replaceStart: tokenContext.replaceStart,
+        replaceEnd: tokenContext.replaceEnd
+      }));
+    }
+
+    return this.dedupeSearchAutocompleteItems(items).slice(0, 12);
+  }
+
+  renderSearchAutocomplete(state) {
+    const menu = state?.searchAutocompleteEl || null;
+    if (!menu) return;
+
+    menu.innerHTML = '';
+    const items = Array.isArray(state.searchAutocompleteItems) ? state.searchAutocompleteItems : [];
+    if (state.searchAutocompleteOpen !== true || items.length === 0) return;
+
+    const list = document.createElement('div');
+    list.className = 'autocomplete clickable';
+    const scroll = document.createElement('div');
+    scroll.className = 'vscroll-node';
+    const content = document.createElement('div');
+    content.className = 'vcontent';
+
+    items.forEach((item, index) => {
+      const row = document.createElement('div');
+      row.className = 'autocomplete--option';
+      row.dataset.index = String(index);
+      row.setAttribute('role', 'option');
+      if (index === state.searchAutocompleteSelectedIndex) {
+        row.classList.add('autocomplete--option-selected');
+      }
+
+      const iconWrap = document.createElement('span');
+      iconWrap.className = 'autocomplete--option-icon';
+      if (item.icon) {
+        try {
+          iconWrap.appendChild(this.ui.createIcon(item.icon));
+        } catch (e) {
+          iconWrap.textContent = '@';
+        }
+      }
+
+      const label = document.createElement('span');
+      label.className = 'autocomplete--option-label';
+      label.textContent = item.label;
+
+      const right = document.createElement('span');
+      right.className = 'autocomplete--option-right';
+      right.textContent = item.detail || '';
+
+      row.appendChild(iconWrap);
+      row.appendChild(label);
+      row.appendChild(right);
+
+      row.addEventListener('mouseenter', () => {
+        state.searchAutocompleteSelectedIndex = index;
+        this.renderSearchAutocomplete(state);
+      });
+      row.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+      });
+      row.addEventListener('click', (e) => {
+        e.preventDefault();
+        state.searchAutocompleteSelectedIndex = index;
+        this.applySelectedSearchAutocompleteItem(state);
+      });
+
+      content.appendChild(row);
+    });
+
+    scroll.appendChild(content);
+    list.appendChild(scroll);
+    menu.appendChild(list);
+  }
+
+  syncSearchAutocompleteControlState(state) {
+    if (!state?.rootEl) return;
+    state.rootEl.classList.toggle('tlr-search-autocomplete-open', state.searchAutocompleteOpen === true);
+  }
+
+  setSearchAutocompleteOpen(state, open) {
+    if (!state) return;
+    state.searchAutocompleteOpen = open === true && (state.searchAutocompleteItems?.length || 0) > 0;
+
+    if (state.searchAutocompleteDismissHandler) {
+      try {
+        document.removeEventListener('pointerdown', state.searchAutocompleteDismissHandler, true);
+        document.removeEventListener('mousedown', state.searchAutocompleteDismissHandler, true);
+      } catch (e) {
+        // ignore
+      }
+      state.searchAutocompleteDismissHandler = null;
+    }
+
+    this.syncSearchAutocompleteControlState(state);
+    this.renderSearchAutocomplete(state);
+
+    if (state.searchAutocompleteOpen !== true) return;
+
+    const onOutsideMouseDown = (ev) => {
+      const menu = state.searchAutocompleteEl || null;
+      const input = state.searchInputEl || null;
+      const target = ev.target;
+      if (!menu || !menu.isConnected || !input || !input.isConnected) {
+        this.setSearchAutocompleteOpen(state, false);
+        return;
+      }
+      if (menu.contains(target)) return;
+      if (input.contains?.(target)) return;
+      this.setSearchAutocompleteOpen(state, false);
+    };
+
+    state.searchAutocompleteDismissHandler = onOutsideMouseDown;
+    try {
+      document.addEventListener('pointerdown', onOutsideMouseDown, true);
+      document.addEventListener('mousedown', onOutsideMouseDown, true);
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  moveSearchAutocompleteSelection(state, delta) {
+    const items = state?.searchAutocompleteItems || [];
+    if (!state || state.searchAutocompleteOpen !== true || items.length === 0) return;
+    const lastIndex = items.length - 1;
+    const next = Math.max(0, Math.min(lastIndex, (state.searchAutocompleteSelectedIndex || 0) + delta));
+    if (next === state.searchAutocompleteSelectedIndex) return;
+    state.searchAutocompleteSelectedIndex = next;
+    this.renderSearchAutocomplete(state);
+  }
+
+  applySelectedSearchAutocompleteItem(state) {
+    const items = state?.searchAutocompleteItems || [];
+    const item = items[state?.searchAutocompleteSelectedIndex || 0] || null;
+    const input = state?.searchInputEl || null;
+    if (!state || !item || !input) return;
+
+    const value = state.searchQuery || '';
+    const start = Math.max(0, Math.min(value.length, item.replaceStart || 0));
+    const end = Math.max(start, Math.min(value.length, item.replaceEnd || 0));
+    const nextValue = `${value.slice(0, start)}${item.insertText}${value.slice(end)}`;
+    const caret = start + item.insertText.length;
+
+    state.searchQuery = nextValue;
+    input.value = nextValue;
+    this.setSearchAutocompleteOpen(state, false);
+    this.handleSearchQueryChanged(state, { immediate: false, keepFocus: true });
+
+    setTimeout(() => {
+      try {
+        input.focus();
+        input.setSelectionRange(caret, caret);
+      } catch (e) {
+        // ignore
+      }
+      this.updateSearchAutocomplete(state);
+    }, 0);
+  }
+
+  updateSearchAutocomplete(state) {
+    if (!state?.searchInputEl) return;
+
+    const input = state.searchInputEl;
+    const query = state.searchQuery || '';
+    const caret = Number.isFinite(input.selectionStart) ? input.selectionStart : query.length;
+    if (document.activeElement !== input || caret !== query.length) {
+      state.searchAutocompleteItems = [];
+      state.searchAutocompleteSelectedIndex = 0;
+      this.setSearchAutocompleteOpen(state, false);
+      return;
+    }
+
+    const catalog = this.getQueryAutocompleteCatalogSync();
+    const items = this.getSearchAutocompleteItems(query, caret, catalog);
+    state.searchAutocompleteItems = items;
+    state.searchAutocompleteSelectedIndex = Math.max(0, Math.min(items.length - 1, state.searchAutocompleteSelectedIndex || 0));
+    this.setSearchAutocompleteOpen(state, items.length > 0);
+
+    const requestSeq = (state.searchAutocompleteRequestSeq || 0) + 1;
+    state.searchAutocompleteRequestSeq = requestSeq;
+    this.ensureQueryAutocompleteCatalog()
+      .then(() => {
+        const liveState = this._panelStates.get(state.panelId) || null;
+        if (!liveState || liveState.searchAutocompleteRequestSeq !== requestSeq) return;
+        if (document.activeElement !== liveState.searchInputEl) return;
+        const liveQuery = liveState.searchQuery || '';
+        const liveCaret = Number.isFinite(liveState.searchInputEl?.selectionStart)
+          ? liveState.searchInputEl.selectionStart
+          : liveQuery.length;
+        const liveItems = this.getSearchAutocompleteItems(liveQuery, liveCaret, this.getQueryAutocompleteCatalogSync());
+        liveState.searchAutocompleteItems = liveItems;
+        liveState.searchAutocompleteSelectedIndex = Math.max(0, Math.min(liveItems.length - 1, liveState.searchAutocompleteSelectedIndex || 0));
+        this.setSearchAutocompleteOpen(liveState, liveItems.length > 0);
+      })
+      .catch(() => {
+        // ignore
+      });
+  }
+
+  isIncompleteQueryDraft(rawQuery) {
+    const query = (rawQuery || '').trim();
+    if (this.getSearchMode(query) !== 'query') return false;
+    if (/(?:^|[\s(])@$/.test(query)) return true;
+    if (/(?:^|[\s(])@"(?:[^"\\]|\\.)*$/.test(query)) return true;
+    if (/(?:^|[\s(])@(?:"(?:[^"\\]|\\.)*"|[A-Za-z0-9_]+)\.$/.test(query)) return true;
+    if (/(?:^|[\s(])@(?:"(?:[^"\\]|\\.)*"|[A-Za-z0-9_]+)\.(?:"(?:[^"\\]|\\.)*|[A-Za-z0-9_]*)$/.test(query)) return true;
+    if (/(?:^|[\s(])@(?:"(?:[^"\\]|\\.)*"|[A-Za-z0-9_]+)\.(?:"(?:[^"\\]|\\.)*"|[A-Za-z0-9_]+)\s*$/.test(query)) return true;
+    if (/(?:^|[\s(])@(?:created_at|modified_at|created_by|modified_by|text|type|date|due|time|mention|scheduled|hashtag|link|collection|guid|pguid|rguid|backref|linkto)\s*$/i.test(query)) {
+      return true;
+    }
+    if (/(?:^|[\s(])@(?:(?:"(?:[^"\\]|\\.)*"|[A-Za-z0-9_]+)(?:\.(?:"(?:[^"\\]|\\.)*"|[A-Za-z0-9_]+))?)\s*(?:=|!=|<=|>=|<|>)\s*$/i.test(query)) {
+      return true;
+    }
+    return false;
+  }
+
   createQueryFilterState(query, { loading, ready, error, includesUnlinked, matchedRecordGuids, matchedLineGuids, matchedLineRecordGuids } = {}) {
     return {
       query: (query || '').trim(),
@@ -865,6 +1435,7 @@ class Plugin extends AppPlugin {
     if (!state) return;
     this.syncScopedQueryWithCurrentInput(state, { immediate: immediate === true, reason: 'input' });
     this.renderFromCache(state);
+    this.updateSearchAutocomplete(state);
 
     if (keepFocus === true && state.searchInputEl) {
       setTimeout(() => {
@@ -880,7 +1451,7 @@ class Plugin extends AppPlugin {
   syncScopedQueryWithCurrentInput(state, { immediate, reason } = {}) {
     if (!state) return;
     const query = (state.searchQuery || '').trim();
-    if (this.getSearchMode(query) !== 'query') {
+    if (this.getSearchMode(query) !== 'query' || this.isIncompleteQueryDraft(query)) {
       this.clearQueryFilterState(state);
       return;
     }
@@ -921,7 +1492,7 @@ class Plugin extends AppPlugin {
     if (!state) return;
 
     const query = (state.searchQuery || '').trim();
-    if (this.getSearchMode(query) !== 'query') {
+    if (this.getSearchMode(query) !== 'query' || this.isIncompleteQueryDraft(query)) {
       this.clearQueryFilterState(state);
       return;
     }
@@ -961,7 +1532,7 @@ class Plugin extends AppPlugin {
 
     const results = state.lastResults || null;
     const query = (state.searchQuery || '').trim();
-    if (!results || this.getSearchMode(query) !== 'query') {
+    if (!results || this.getSearchMode(query) !== 'query' || this.isIncompleteQueryDraft(query)) {
       this.clearQueryFilterState(state);
       this.renderFromCache(state);
       return;
@@ -3310,9 +3881,10 @@ class Plugin extends AppPlugin {
 
     const query = (state.searchQuery || '').trim();
     const searchMode = this.getSearchMode(query);
+    const incompleteQueryDraft = searchMode === 'query' && this.isIncompleteQueryDraft(query);
     const textQueryLower = searchMode === 'text' ? query.toLowerCase() : '';
     const queryFilterState = searchMode === 'query' ? this.getQueryFilterState(state, query) : null;
-    const canApplyScopedQuery = searchMode === 'query' && queryFilterState?.ready === true;
+    const canApplyScopedQuery = searchMode === 'query' && incompleteQueryDraft !== true && queryFilterState?.ready === true;
     const shouldScopeUnlinked = searchMode === 'query'
       ? this.shouldIncludeUnlinkedInQueryScope(state, state.lastResults || {})
       : true;
@@ -3451,7 +4023,9 @@ class Plugin extends AppPlugin {
         const shortQuery = query.length > 24 ? `${query.slice(0, 24)}...` : query;
         parts.push(`Query: "${shortQuery}"`);
       }
-      if (queryFilterState?.error) {
+      if (incompleteQueryDraft) {
+        parts.push('Continue typing...');
+      } else if (queryFilterState?.error) {
         parts.push('Invalid query');
       } else if (queryFilterState?.loading === true && canApplyScopedQuery !== true) {
         parts.push('Applying...');
@@ -3485,7 +4059,9 @@ class Plugin extends AppPlugin {
     }
     state.countEl.textContent = parts.join(' | ');
 
-    if (searchMode === 'query' && queryFilterState?.error) {
+    if (searchMode === 'query' && incompleteQueryDraft) {
+      this.appendNote(body, 'Finish the query to filter the current backreferences.');
+    } else if (searchMode === 'query' && queryFilterState?.error) {
       this.appendError(body, queryFilterState.error);
     } else if (searchMode === 'query' && queryFilterState?.loading === true) {
       this.appendNote(body, canApplyScopedQuery ? 'Refreshing query results...' : 'Applying query to current backreferences...');
@@ -4485,6 +5061,7 @@ class Plugin extends AppPlugin {
       }
 
       .tlr-search-wrap {
+        position: relative;
         display: flex;
         align-items: center;
         gap: 6px;
@@ -4537,6 +5114,34 @@ class Plugin extends AppPlugin {
 
       .tlr-search-input::placeholder {
         color: var(--text-muted, rgba(0, 0, 0, 0.6));
+      }
+
+      .tlr-search-autocomplete {
+        display: none;
+        position: absolute;
+        top: calc(100% + 8px);
+        left: 0;
+        width: min(420px, max(260px, 100%));
+        max-width: min(90vw, 420px);
+        padding: 6px;
+        border-radius: 8px;
+        border: 1px solid var(--cmdpal-border-color, var(--divider-color, var(--border-subtle, rgba(0, 0, 0, 0.12))));
+        background: var(--cmdpal-bg-color, var(--panel-bg-color, var(--bg-default, var(--bg-panel, rgba(22, 26, 24, 0.96)))));
+        box-shadow: var(--cmdpal-box-shadow, 0 12px 34px rgba(0, 0, 0, 0.18));
+        z-index: 140;
+      }
+
+      .tlr-search-autocomplete .autocomplete--option {
+        border-radius: 6px;
+      }
+
+      .tlr-search-autocomplete .autocomplete--option-right {
+        color: var(--text-muted, rgba(0, 0, 0, 0.6));
+        font-size: 11px;
+      }
+
+      .tlr-search-autocomplete-open .tlr-search-autocomplete {
+        display: block;
       }
 
       .tlr-search-clear {
