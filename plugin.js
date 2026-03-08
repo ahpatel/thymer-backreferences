@@ -2880,7 +2880,28 @@ class Plugin extends AppPlugin {
     const recordName = (record?.getName?.() || '').trim();
     if (!recordName) return;
 
-    const groups = state?.lastResults?.unlinkedGroups || [];
+    const allGroups = state?.lastResults?.unlinkedGroups || [];
+
+    // When a filter is active, only link visible (filtered) lines
+    const pinnedPhrases = (state.searchPhrases || []).map((p) => p.toLowerCase()).filter(Boolean);
+    const typedPhrase = (state.searchTyped || '').trim().toLowerCase();
+    const phrases = typedPhrase ? [...pinnedPhrases, typedPhrase] : [...pinnedPhrases];
+    const hasFilter = phrases.length > 0;
+
+    let groups = allGroups;
+    if (hasFilter) {
+      const wordStartRe = (p) => new RegExp(`(?:^|[^a-z0-9])${p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i');
+      const allMatch = (text) => phrases.every((p) => wordStartRe(p).test(text));
+      groups = [];
+      for (const g of allGroups) {
+        const lines = (g?.lines || []).filter((line) => {
+          const text = this.segmentsToPlainText(line?.segments || []);
+          return allMatch(text);
+        });
+        if (lines.length > 0) groups.push({ ...g, lines });
+      }
+    }
+
     const tasks = [];
     for (const g of groups) {
       for (const line of g?.lines || []) {
