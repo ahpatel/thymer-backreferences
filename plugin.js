@@ -4114,7 +4114,8 @@ class Plugin extends AppPlugin {
         width: 100%;
         padding: 6px 10px 6px calc(10px + var(--tlr-context-indent, 0px));
         text-align: left;
-        color: var(--text, inherit);
+        color: var(--text-secondary, var(--text-subtle, var(--text, inherit)));
+        opacity: 0.65;
         line-height: 1.35;
         border-left: 1px solid var(--divider-color, var(--border-subtle, rgba(0, 0, 0, 0.12)));
       }
