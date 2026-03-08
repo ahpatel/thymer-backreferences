@@ -2679,18 +2679,19 @@ class Plugin extends AppPlugin {
     titleEl.className = 'tlr-section-title-text';
     titleEl.textContent = title || '';
 
-    const countEl = document.createElement('span');
-    countEl.className = 'tlr-section-count text-details';
-    countEl.textContent = typeof count === 'number' ? `${count}` : '';
-
     header.appendChild(caret);
     header.appendChild(titleEl);
-    header.appendChild(countEl);
-    headerRow.appendChild(header);
 
     if (extraHeaderContent) {
-      headerRow.appendChild(extraHeaderContent);
+      header.appendChild(extraHeaderContent);
+    } else {
+      const countEl = document.createElement('span');
+      countEl.className = 'tlr-section-count text-details';
+      countEl.textContent = typeof count === 'number' ? `${count}` : '';
+      header.appendChild(countEl);
     }
+
+    headerRow.appendChild(header);
 
     const bodyEl = document.createElement('div');
     bodyEl.className = 'tlr-section-body';
