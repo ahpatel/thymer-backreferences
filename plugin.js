@@ -1,7 +1,7 @@
 class Plugin extends AppPlugin {
   onLoad() {
     // NOTE: Thymer strips top-level code outside the Plugin class.
-    this._version = '0.4.3';
+    this._version = '0.4.5';
     this._pluginName = 'Backreferences';
 
     this._panelStates = new Map();
@@ -1738,12 +1738,12 @@ class Plugin extends AppPlugin {
     return null;
   }
 
-  collectDescendantContext(line) {
+  async collectDescendantContext(line) {
     const descendants = [];
     const depthByGuid = {};
     const seen = new Set();
 
-    const walk = (items, depth) => {
+    const walk = async (items, depth) => {
       for (const item of items || []) {
         const guid = item?.guid || null;
         if (!guid) continue;
@@ -1751,12 +1751,70 @@ class Plugin extends AppPlugin {
         seen.add(guid);
         descendants.push(item);
         depthByGuid[guid] = depth;
-        walk(Array.isArray(item?.children) ? item.children : [], depth + 1);
+        let children = [];
+        try {
+          children = (await item.getChildren()) || [];
+        } catch (e) {
+          children = Array.isArray(item?.children) ? item.children : [];
+        }
+        await walk(children, depth + 1);
       }
     };
 
-    walk(Array.isArray(line?.children) ? line.children : [], 1);
+    let rootChildren = [];
+    try {
+      rootChildren = (await line.getChildren()) || [];
+    } catch (e) {
+      rootChildren = Array.isArray(line?.children) ? line.children : [];
+    }
+
+    await walk(rootChildren, 1);
     return { descendants, depthByGuid };
+  }
+
+  buildRecordDocumentOrder(record, items) {
+    const recordGuid = record?.guid || null;
+    const list = Array.isArray(items) ? items.filter(Boolean) : [];
+    if (!recordGuid || list.length === 0) return list;
+
+    const childrenByParent = new Map();
+    const visited = new Set();
+    const ordered = [];
+
+    for (const item of list) {
+      const guid = item?.guid || null;
+      if (!guid) continue;
+
+      const parentGuid = typeof item?.parent_guid === 'string' && item.parent_guid
+        ? item.parent_guid
+        : recordGuid;
+      const key = parentGuid === recordGuid ? recordGuid : parentGuid;
+
+      if (!childrenByParent.has(key)) childrenByParent.set(key, []);
+      childrenByParent.get(key).push(item);
+    }
+
+    const walk = (parentGuid) => {
+      const children = childrenByParent.get(parentGuid) || [];
+      for (const item of children) {
+        const guid = item?.guid || null;
+        if (!guid || visited.has(guid)) continue;
+        visited.add(guid);
+        ordered.push(item);
+        walk(guid);
+      }
+    };
+
+    walk(recordGuid);
+
+    for (const item of list) {
+      const guid = item?.guid || null;
+      if (!guid || visited.has(guid)) continue;
+      visited.add(guid);
+      ordered.push(item);
+    }
+
+    return ordered;
   }
 
   async ensureLinkedContextLoaded(state, line) {
@@ -1770,51 +1828,36 @@ class Plugin extends AppPlugin {
     this.renderFromCache(state);
 
     ctx.loadPromise = (async () => {
-      const tree = (await line.getTreeContext()) || { ancestors: [], descendants: [] };
-      const ancestors = Array.isArray(tree?.ancestors) ? Array.from(tree.ancestors).reverse() : [];
-
-      if (!Array.isArray(line?.children)) {
-        try {
-          await line.getChildren();
-        } catch (e) {
-          // ignore
-        }
-      }
-      const descendantContext = this.collectDescendantContext(line);
+      await line.getTreeContext();
+      const descendantContext = await this.collectDescendantContext(line);
 
       const record = line.getRecord?.() || null;
       const allItems = record && typeof record.getLineItems === 'function'
         ? ((await record.getLineItems(false)) || [])
         : [];
+      const orderedItems = this.buildRecordDocumentOrder(record, allItems);
+      const contextItems = orderedItems.length > 0 ? orderedItems : allItems;
       const matchedGuid = line?.guid || '';
-      const excludedGuids = new Set([matchedGuid]);
-      for (const item of ancestors) {
-        const guid = item?.guid || '';
-        if (guid) excludedGuids.add(guid);
-      }
-      for (const item of descendantContext.descendants || []) {
-        const guid = item?.guid || '';
-        if (guid) excludedGuids.add(guid);
-      }
-
-      const matchedIndex = allItems.findIndex((item) => (item?.guid || '') === matchedGuid);
+      const matchedIndex = contextItems.findIndex((item) => (item?.guid || '') === matchedGuid);
       const aboveItems = [];
       const belowItems = [];
 
       if (matchedIndex >= 0) {
-        for (let i = matchedIndex - 1; i >= 0; i -= 1) {
-          const item = allItems[i] || null;
-          const guid = item?.guid || '';
-          if (!guid || excludedGuids.has(guid)) continue;
-          aboveItems.unshift(item);
+        let subtreeEndIndex = matchedIndex;
+        const descendantGuids = new Set(
+          (descendantContext.descendants || [])
+            .map((item) => item?.guid || '')
+            .filter(Boolean)
+        );
+
+        for (let i = matchedIndex + 1; i < contextItems.length; i += 1) {
+          const guid = contextItems[i]?.guid || '';
+          if (!guid || !descendantGuids.has(guid)) continue;
+          subtreeEndIndex = i;
         }
 
-        for (let i = matchedIndex + 1; i < allItems.length; i += 1) {
-          const item = allItems[i] || null;
-          const guid = item?.guid || '';
-          if (!guid || excludedGuids.has(guid)) continue;
-          belowItems.push(item);
-        }
+        aboveItems.push(...contextItems.slice(0, matchedIndex));
+        belowItems.push(...contextItems.slice(subtreeEndIndex + 1));
       }
 
       ctx.descendants = descendantContext.descendants;
