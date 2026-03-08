@@ -2723,7 +2723,7 @@ class Plugin extends AppPlugin {
     if (!container) return;
 
     const state = opts?.state || null;
-    const query = (opts?.query || '').trim();
+    const query = Array.isArray(opts?.query) ? opts.query : (typeof opts?.query === 'string' ? opts.query : '');
 
     for (const g of groups || []) {
       const record = g.record || null;
@@ -3049,7 +3049,7 @@ class Plugin extends AppPlugin {
   appendPropertyReferenceGroups(container, groups, opts) {
     if (!container) return;
 
-    const query = (opts?.query || '').trim();
+    const query = Array.isArray(opts?.query) ? opts.query : (typeof opts?.query === 'string' ? opts.query : '');
     const state = opts?.state || null;
 
     for (const g of groups || []) {
@@ -3116,7 +3116,7 @@ class Plugin extends AppPlugin {
 
     const state = opts?.state || null;
     const maxResults = opts?.maxResults || 0;
-    const query = (opts?.query || '').trim();
+    const query = Array.isArray(opts?.query) ? opts.query : (typeof opts?.query === 'string' ? opts.query : '');
     const totalLineCount = typeof opts?.totalLineCount === 'number' ? opts.totalLineCount : null;
     const emptyMessage = (opts?.emptyMessage || '').trim() || 'No linked references.';
 
