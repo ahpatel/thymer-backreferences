@@ -4296,6 +4296,7 @@ class Plugin extends AppPlugin {
       .tlr-chips-row {
         display: flex;
         flex-wrap: wrap;
+        justify-content: flex-end;
         gap: 4px;
         padding: 0 8px 6px;
         min-height: 0;
