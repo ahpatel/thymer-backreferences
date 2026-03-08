@@ -1,7 +1,7 @@
 class Plugin extends AppPlugin {
   onLoad() {
     // NOTE: Thymer strips top-level code outside the Plugin class.
-    this._version = '0.4.1';
+    this._version = '0.4.3';
     this._pluginName = 'Backreferences';
 
     this._panelStates = new Map();
@@ -14,6 +14,9 @@ class Plugin extends AppPlugin {
     this._storageKeyPropGroupCollapsed = 'thymer_backreferences_prop_group_collapsed_v2';
     this._legacyStorageKeyPropGroupCollapsed = null;
     this._propGroupCollapsed = this.loadPropGroupCollapsedSetting();
+
+    this._storageKeyRecordGroupCollapsed = 'thymer_backreferences_record_group_collapsed_v1';
+    this._recordGroupCollapsed = this.loadRecordGroupCollapsedSetting();
 
     this._storageKeyPropertyRefsCollapsed = 'thymer_backreferences_property_refs_collapsed_v1';
     this._propertyRefsCollapsed = this.loadBoolSetting(this._storageKeyPropertyRefsCollapsed, false);
@@ -499,6 +502,36 @@ class Plugin extends AppPlugin {
       this.setPropGroupCollapsed(propName, nextCollapsed);
       if (groupEl) groupEl.classList.toggle('tlr-prop-collapsed', nextCollapsed);
       actionEl.setAttribute?.('aria-expanded', nextCollapsed ? 'false' : 'true');
+      return;
+    }
+
+    if (action === 'toggle-record-group') {
+      const guid = actionEl.dataset.recordGuid || null;
+      if (!guid) return;
+
+      const nextCollapsed = !this.isRecordGroupCollapsed(guid);
+      if (!this._recordGroupCollapsed) this._recordGroupCollapsed = new Set();
+
+      if (nextCollapsed) {
+        this._recordGroupCollapsed.add(guid);
+      } else {
+        this._recordGroupCollapsed.delete(guid);
+      }
+      this.saveRecordGroupCollapsedSetting();
+
+      for (const s of this._panelStates.values()) {
+        if (!s?.rootEl) continue;
+        // Group toggle carets
+        const btnEls = Array.from(s.rootEl.querySelectorAll?.(`.tlr-group-header-pill[data-record-guid="${guid}"]`) || []);
+        for (const btn of btnEls) {
+          btn.setAttribute?.('aria-expanded', nextCollapsed ? 'false' : 'true');
+        }
+        // Group containers
+        const groupEls = Array.from(s.rootEl.querySelectorAll?.(`.tlr-group[data-record-guid="${guid}"]`) || []);
+        for (const groupEl of groupEls) {
+          groupEl.classList.toggle('tlr-group-collapsed', nextCollapsed);
+        }
+      }
       return;
     }
 
@@ -1028,6 +1061,33 @@ class Plugin extends AppPlugin {
     } catch (e) {
       // ignore
     }
+  }
+
+  loadRecordGroupCollapsedSetting() {
+    try {
+      const stored = localStorage.getItem(this._storageKeyRecordGroupCollapsed);
+      if (stored) {
+        const arr = JSON.parse(stored);
+        if (Array.isArray(arr)) return new Set(arr);
+      }
+    } catch (e) {
+      // ignore
+    }
+    return new Set();
+  }
+
+  saveRecordGroupCollapsedSetting() {
+    try {
+      const arr = Array.from(this._recordGroupCollapsed || []);
+      localStorage.setItem(this._storageKeyRecordGroupCollapsed, JSON.stringify(arr));
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  isRecordGroupCollapsed(guid) {
+    if (!this._recordGroupCollapsed) return false;
+    return this._recordGroupCollapsed.has(guid);
   }
 
   isPropGroupCollapsed(propName) {
@@ -2345,26 +2405,40 @@ class Plugin extends AppPlugin {
       const recordGuid = record?.guid || null;
       if (!recordGuid) continue;
 
+      const isCollapsed = this.isRecordGroupCollapsed(recordGuid);
+
       const groupEl = document.createElement('div');
       groupEl.className = 'tlr-group';
+      groupEl.dataset.recordGuid = recordGuid;
+      if (isCollapsed) groupEl.classList.add('tlr-group-collapsed');
 
-      const header = document.createElement('button');
-      header.type = 'button';
-      header.className = 'tlr-group-header button-normal button-normal-hover';
-      header.dataset.action = 'open-record';
+      const header = document.createElement('div');
+      header.className = 'tlr-group-header-pill button-normal button-normal-hover';
+      header.dataset.action = 'toggle-record-group';
       header.dataset.recordGuid = recordGuid;
+      header.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
 
-      const title = document.createElement('div');
-      title.className = 'tlr-group-title';
-      title.textContent = record.getName?.() || 'Untitled';
+      const caret = document.createElement('span');
+      caret.className = 'tlr-group-caret';
+      caret.setAttribute('aria-hidden', 'true');
 
-      const meta = document.createElement('div');
-      meta.className = 'tlr-group-meta text-details';
-      const activeLineCount = (g.lines || []).reduce((n, line) => n + (this.isLineSharedIgnored(line) ? 0 : 1), 0);
-      meta.textContent = `${activeLineCount}`;
+      const titleBtn = document.createElement('span');
+      titleBtn.className = 'tlr-group-title-btn';
+      titleBtn.dataset.action = 'open-record';
+      titleBtn.dataset.recordGuid = recordGuid;
 
-      header.appendChild(title);
-      header.appendChild(meta);
+      const groupTitle = document.createElement('div');
+      groupTitle.className = 'tlr-group-title';
+      groupTitle.textContent = record.getName?.() || 'Untitled';
+      titleBtn.appendChild(groupTitle);
+
+      const groupMeta = document.createElement('div');
+      groupMeta.className = 'tlr-group-meta text-details';
+      groupMeta.textContent = `${g.lines?.length || 0}`;
+
+      header.appendChild(caret);
+      header.appendChild(titleBtn);
+      header.appendChild(groupMeta);
 
       const linesEl = document.createElement('div');
       linesEl.className = 'tlr-lines';
@@ -2496,24 +2570,39 @@ class Plugin extends AppPlugin {
       const recordGuid = record?.guid || null;
       if (!recordGuid) continue;
 
+      const isCollapsed = this.isRecordGroupCollapsed(recordGuid);
+
       const groupEl = document.createElement('div');
       groupEl.className = 'tlr-group';
+      groupEl.dataset.recordGuid = recordGuid;
+      if (isCollapsed) groupEl.classList.add('tlr-group-collapsed');
 
-      const header = document.createElement('button');
-      header.type = 'button';
-      header.className = 'tlr-group-header button-normal button-normal-hover';
-      header.dataset.action = 'open-record';
+      const header = document.createElement('div');
+      header.className = 'tlr-group-header-pill button-normal button-normal-hover';
+      header.dataset.action = 'toggle-record-group';
       header.dataset.recordGuid = recordGuid;
+      header.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
+
+      const caret = document.createElement('span');
+      caret.className = 'tlr-group-caret';
+      caret.setAttribute('aria-hidden', 'true');
+
+      const titleBtn = document.createElement('span');
+      titleBtn.className = 'tlr-group-title-btn';
+      titleBtn.dataset.action = 'open-record';
+      titleBtn.dataset.recordGuid = recordGuid;
 
       const groupTitle = document.createElement('div');
       groupTitle.className = 'tlr-group-title';
       groupTitle.textContent = record.getName?.() || 'Untitled';
+      titleBtn.appendChild(groupTitle);
 
       const groupMeta = document.createElement('div');
       groupMeta.className = 'tlr-group-meta text-details';
       groupMeta.textContent = `${g.lines?.length || 0}`;
 
-      header.appendChild(groupTitle);
+      header.appendChild(caret);
+      header.appendChild(titleBtn);
       header.appendChild(groupMeta);
 
       const linesEl = document.createElement('div');
@@ -3244,14 +3333,45 @@ class Plugin extends AppPlugin {
 
       .tlr-group { margin: 12px 0 16px; }
 
-      .tlr-group-header {
-        width: 100%;
+      .tlr-group-header-pill {
         display: flex;
         align-items: center;
-        justify-content: space-between;
+        justify-content: flex-start;
         gap: 10px;
+        width: 100%;
         padding: 8px 10px;
         text-align: left;
+        cursor: pointer;
+      }
+
+      .tlr-group-caret {
+        width: 0;
+        height: 0;
+        border-top: 5px solid transparent;
+        border-bottom: 5px solid transparent;
+        border-left: 6px solid var(--text-muted, rgba(0, 0, 0, 0.6));
+        opacity: 0.85;
+        transform: rotate(90deg);
+        transition: transform 140ms ease;
+        flex: 0 0 auto;
+      }
+
+      .tlr-group-collapsed .tlr-group-caret {
+        transform: rotate(0deg);
+      }
+
+      .tlr-group-collapsed .tlr-lines {
+        display: none;
+      }
+
+      .tlr-group-title-btn {
+        flex: 1 1 auto;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        padding: 0;
+        margin: 0;
+        cursor: pointer;
       }
 
       .tlr-group-title {
@@ -3267,6 +3387,7 @@ class Plugin extends AppPlugin {
         color: var(--text-muted, rgba(0, 0, 0, 0.6));
         font-size: 12px;
         flex: 0 0 auto;
+        margin-left: auto;
       }
 
       .tlr-lines { margin-top: 8px; display: flex; flex-direction: column; gap: 12px; }
