@@ -1898,9 +1898,10 @@ class Plugin extends AppPlugin {
   findLinkedLineByGuid(state, lineGuid) {
     const target = (lineGuid || '').trim();
     if (!target || !state?.lastResults) return null;
-    const groups = Array.isArray(state.lastResults?.linkedGroups) ? state.lastResults.linkedGroups : [];
+    const linked = Array.isArray(state.lastResults?.linkedGroups) ? state.lastResults.linkedGroups : [];
+    const unlinked = Array.isArray(state.lastResults?.unlinkedGroups) ? state.lastResults.unlinkedGroups : [];
 
-    for (const g of groups) {
+    for (const g of [...linked, ...unlinked]) {
       for (const line of g?.lines || []) {
         if ((line?.guid || '') === target) return line;
       }
@@ -2765,13 +2766,18 @@ class Plugin extends AppPlugin {
         const mainRow = document.createElement('div');
         mainRow.className = 'tlr-line-main';
         mainRow.appendChild(btn);
+        entryEl.appendChild(mainRow);
+
+        // Sub-row: context controls (left) + Link button (right), centered
+        const actionsRow = document.createElement('div');
+        actionsRow.className = 'tlr-unlinked-actions-row';
 
         if (state && ctx) {
-          mainRow.appendChild(this.buildLinkedContextControls(line.guid, ctx));
+          actionsRow.appendChild(this.buildLinkedContextControls(line.guid, ctx));
         }
 
-        mainRow.appendChild(linkBtn);
-        entryEl.appendChild(mainRow);
+        actionsRow.appendChild(linkBtn);
+        entryEl.appendChild(actionsRow);
 
         if (state && ctx) {
           if (ctx.loading === true) {
@@ -4215,22 +4221,31 @@ class Plugin extends AppPlugin {
       .tlr-group-collapsed .tlr-group-caret::before { transform: rotate(-90deg); }
       .tlr-group-collapsed .tlr-lines { display: none; }
 
-      /* Link buttons for unlinked references */
+      /* Actions row for unlinked refs: context controls left, Link button right */
+      .tlr-unlinked-actions-row {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 1px 0 2px;
+        opacity: 0;
+        transition: opacity 0.12s;
+      }
+      .tlr-line-entry:hover .tlr-unlinked-actions-row { opacity: 1; }
+      .tlr-unlinked-actions-row .tlr-line-actions { margin: 0; }
+
+      /* Link button */
       .tlr-link-btn {
         flex-shrink: 0;
-        margin-left: 6px;
         font-size: 0.8em;
         color: var(--accent, var(--link-color, #4a90e2));
-        opacity: 0;
-        transition: opacity 0.1s;
         padding: 0;
         background: none;
         border: none;
         cursor: pointer;
         text-decoration: underline;
       }
-      .tlr-link-btn:hover { opacity: 1 !important; }
-      .tlr-line-main:hover .tlr-link-btn { opacity: 0.85; }
+      .tlr-link-btn:hover { opacity: 0.75; }
       .tlr-link-all-btn {
         font-size: 0.8em;
         margin-left: auto;
