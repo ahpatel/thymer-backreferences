@@ -15,18 +15,6 @@ class Plugin extends AppPlugin {
     this._legacyStorageKeyPropGroupCollapsed = null;
     this._propGroupCollapsed = this.loadPropGroupCollapsedSetting();
 
-    this._storageKeyRecordGroupCollapsed = 'thymer_backreferences_record_group_collapsed_v1';
-    this._recordGroupCollapsed = this.loadRecordGroupCollapsedSetting();
-
-    this._storageKeyPropertyRefsCollapsed = 'thymer_backreferences_property_refs_collapsed_v1';
-    this._propertyRefsCollapsed = this.loadBoolSetting(this._storageKeyPropertyRefsCollapsed, false);
-
-    this._storageKeyLinkedRefsCollapsed = 'thymer_backreferences_linked_refs_collapsed_v1';
-    this._linkedRefsCollapsed = this.loadBoolSetting(this._storageKeyLinkedRefsCollapsed, false);
-
-    this._storageKeyUnlinkedCollapsed = 'thymer_backreferences_unlinked_collapsed_v1';
-    this._unlinkedCollapsed = this.loadUnlinkedCollapsedSetting();
-
     this._defaultSortBy = 'page_last_edited';
     this._defaultSortDir = 'desc';
     this._storageKeySortByRecord = 'thymer_backreferences_sort_by_record_v1';
@@ -210,8 +198,9 @@ class Plugin extends AppPlugin {
         searchWrapEl: null,
         searchInputEl: null,
         chipsRowEl: null,
-        searchPhrases: [],
+        searchQuery: '',
         searchTyped: '',
+        searchPhrases: [],
         searchOpen: false,
         emptyStateExpanded: false,
         linkedContextByLine: new Map(),
@@ -253,8 +242,9 @@ class Plugin extends AppPlugin {
       searchWrapEl: null,
       searchInputEl: null,
       chipsRowEl: null,
-      searchPhrases: [],
+      searchQuery: '',
       searchTyped: '',
+      searchPhrases: [],
       searchOpen: false,
       emptyStateExpanded: false,
       linkedContextByLine: new Map(),
@@ -567,12 +557,12 @@ class Plugin extends AppPlugin {
     root.classList.toggle('tlr-search-open', state.searchOpen === true);
     root.classList.toggle('tlr-sort-open', state.sortMenuOpen === true);
 
+    state.chipsRowEl = chipsRow;
     state.sortToggleEl = sortToggle;
     state.sortMenuEl = sortMenu;
     state.searchToggleEl = searchToggle;
     state.searchWrapEl = searchWrap;
     state.searchInputEl = input;
-    state.chipsRowEl = chipsRow;
     return root;
   }
 
@@ -617,36 +607,6 @@ class Plugin extends AppPlugin {
       return;
     }
 
-    if (action === 'toggle-record-group') {
-      const guid = actionEl.dataset.recordGuid || null;
-      if (!guid) return;
-
-      const nextCollapsed = !this.isRecordGroupCollapsed(guid);
-      if (!this._recordGroupCollapsed) this._recordGroupCollapsed = new Set();
-
-      if (nextCollapsed) {
-        this._recordGroupCollapsed.add(guid);
-      } else {
-        this._recordGroupCollapsed.delete(guid);
-      }
-      this.saveRecordGroupCollapsedSetting();
-
-      for (const s of this._panelStates.values()) {
-        if (!s?.rootEl) continue;
-        // Group toggle carets
-        const btnEls = Array.from(s.rootEl.querySelectorAll?.(`.tlr-group-header-pill[data-record-guid="${guid}"]`) || []);
-        for (const btn of btnEls) {
-          btn.setAttribute?.('aria-expanded', nextCollapsed ? 'false' : 'true');
-        }
-        // Group containers
-        const groupEls = Array.from(s.rootEl.querySelectorAll?.(`.tlr-group[data-record-guid="${guid}"]`) || []);
-        for (const groupEl of groupEls) {
-          groupEl.classList.toggle('tlr-group-collapsed', nextCollapsed);
-        }
-      }
-      return;
-    }
-
     if (action === 'toggle-search') {
       if (!state) return;
       this.setSearchOpen(state, !(state.searchOpen === true));
@@ -677,23 +637,13 @@ class Plugin extends AppPlugin {
       return;
     }
 
-    if (action === 'remove-chip') {
-      if (!state) return;
-      const idx = parseInt(actionEl.dataset.chipIndex, 10);
-      if (!isNaN(idx) && Array.isArray(state.searchPhrases)) {
-        state.searchPhrases = state.searchPhrases.filter((_, i) => i !== idx);
-        if (typeof state._rebuildChips === 'function') state._rebuildChips();
-        this.renderFromCache(state);
-      }
-      return;
-    }
-
     if (action === 'clear-search') {
       if (!state) return;
-      const hasFilter = (state.searchPhrases || []).length > 0 || (state.searchTyped || '').trim();
-      if (hasFilter) {
-        state.searchPhrases = [];
+      const hasTyped = (state.searchTyped || '').trim().length > 0;
+      const hasChips = (state.searchPhrases || []).length > 0;
+      if (hasTyped || hasChips) {
         state.searchTyped = '';
+        state.searchPhrases = [];
         if (state.searchInputEl) state.searchInputEl.value = '';
         if (typeof state._rebuildChips === 'function') state._rebuildChips();
         this.renderFromCache(state);
@@ -704,50 +654,14 @@ class Plugin extends AppPlugin {
       return;
     }
 
-    if (action === 'toggle-property-refs') {
-      this._propertyRefsCollapsed = !this._propertyRefsCollapsed;
-      this.saveBoolSetting(this._storageKeyPropertyRefsCollapsed, this._propertyRefsCollapsed);
-      for (const s of this._panelStates.values()) {
-        if (!s?.rootEl) continue;
-        const el = s.rootEl.querySelector?.('.tlr-section-block[data-section="property"]') || null;
-        if (el) el.classList.toggle('tlr-section-collapsed', this._propertyRefsCollapsed);
-      }
-      return;
-    }
-
-    if (action === 'toggle-linked-refs') {
-      this._linkedRefsCollapsed = !this._linkedRefsCollapsed;
-      this.saveBoolSetting(this._storageKeyLinkedRefsCollapsed, this._linkedRefsCollapsed);
-      for (const s of this._panelStates.values()) {
-        if (!s?.rootEl) continue;
-        const el = s.rootEl.querySelector?.('.tlr-section-block[data-section="linked"]') || null;
-        if (el) el.classList.toggle('tlr-section-collapsed', this._linkedRefsCollapsed);
-      }
-      return;
-    }
-
-    if (action === 'toggle-unlinked') {
-      this._unlinkedCollapsed = !this._unlinkedCollapsed;
-      this.saveUnlinkedCollapsedSetting(this._unlinkedCollapsed);
-      for (const s of this._panelStates.values()) {
-        if (!s?.rootEl) continue;
-        const el = s.rootEl.querySelector?.('.tlr-section-block[data-section="unlinked"]') || null;
-        if (el) el.classList.toggle('tlr-section-collapsed', this._unlinkedCollapsed);
-      }
-      return;
-    }
-
-    if (action === 'link-unlinked') {
+    if (action === 'remove-chip') {
       if (!state) return;
-      const lineGuid = actionEl.dataset.lineGuid || null;
-      if (!lineGuid) return;
-      this.linkUnlinkedReference(state, lineGuid).catch(() => {});
-      return;
-    }
-
-    if (action === 'link-all-unlinked') {
-      if (!state) return;
-      this.linkAllUnlinkedReferences(state).catch(() => {});
+      const idx = parseInt(actionEl.dataset.chipIndex, 10);
+      if (!isNaN(idx) && Array.isArray(state.searchPhrases)) {
+        state.searchPhrases = state.searchPhrases.filter((_, i) => i !== idx);
+        if (typeof state._rebuildChips === 'function') state._rebuildChips();
+        this.renderFromCache(state);
+      }
       return;
     }
 
@@ -852,6 +766,7 @@ class Plugin extends AppPlugin {
     state.searchToggleEl?.setAttribute?.('aria-expanded', state.searchOpen === true ? 'true' : 'false');
 
     if (state.searchInputEl) {
+      state.searchInputEl.value = state.searchTyped || '';
       if (state.searchOpen === true) {
         setTimeout(() => {
           try {
@@ -1162,71 +1077,6 @@ class Plugin extends AppPlugin {
     } catch (e) {
       // ignore
     }
-  }
-
-  loadBoolSetting(key, defaultValue) {
-    try {
-      const v = localStorage.getItem(key);
-      if (v === '1') return true;
-      if (v === '0') return false;
-    } catch (e) {
-      // ignore
-    }
-    return defaultValue === true;
-  }
-
-  saveBoolSetting(key, value) {
-    try {
-      localStorage.setItem(key, value ? '1' : '0');
-    } catch (e) {
-      // ignore
-    }
-  }
-
-  loadUnlinkedCollapsedSetting() {
-    try {
-      const v = localStorage.getItem(this._storageKeyUnlinkedCollapsed);
-      if (v === '1') return true;
-      if (v === '0') return false;
-    } catch (e) {
-      // ignore
-    }
-    return true;
-  }
-
-  saveUnlinkedCollapsedSetting(collapsed) {
-    try {
-      localStorage.setItem(this._storageKeyUnlinkedCollapsed, collapsed ? '1' : '0');
-    } catch (e) {
-      // ignore
-    }
-  }
-
-  loadRecordGroupCollapsedSetting() {
-    try {
-      const stored = localStorage.getItem(this._storageKeyRecordGroupCollapsed);
-      if (stored) {
-        const arr = JSON.parse(stored);
-        if (Array.isArray(arr)) return new Set(arr);
-      }
-    } catch (e) {
-      // ignore
-    }
-    return new Set();
-  }
-
-  saveRecordGroupCollapsedSetting() {
-    try {
-      const arr = Array.from(this._recordGroupCollapsed || []);
-      localStorage.setItem(this._storageKeyRecordGroupCollapsed, JSON.stringify(arr));
-    } catch (e) {
-      // ignore
-    }
-  }
-
-  isRecordGroupCollapsed(guid) {
-    if (!this._recordGroupCollapsed) return false;
-    return this._recordGroupCollapsed.has(guid);
   }
 
   isPropGroupCollapsed(propName) {
@@ -1723,9 +1573,6 @@ class Plugin extends AppPlugin {
     const maxResults = this.coercePositiveInt(cfg.custom?.maxResults, this._defaultMaxResults);
     const showSelf = cfg.custom?.showSelf === true;
 
-    // Rebuild collection record name cache so we can resolve refs to collection entries.
-    await this.rebuildCollectionRecordNameCache();
-
     const query = `@linkto = "${recordGuid}"`;
     const searchSettled = await Promise.allSettled([
       this.data.searchByQuery(query, maxResults)
@@ -1761,74 +1608,12 @@ class Plugin extends AppPlugin {
       propertyError = 'Error loading property references.';
     }
 
-    // --- Unlinked references ---
-    let unlinkedError = '';
-    let unlinkedGroups = [];
-    const unlinkedTreeContextMap = new Map();
-
-    try {
-      const recordName = (record?.getName?.() || '').trim();
-      if (recordName) {
-        // Collect all line guids that already link to this record (to exclude them).
-        const alreadyLinkedLineGuids = new Set();
-        for (const g of linkedGroups) {
-          for (const line of g?.lines || []) {
-            if (line?.guid) alreadyLinkedLineGuids.add(line.guid);
-          }
-        }
-
-        const unlinkedSearchResult = await this.data.searchByQuery(recordName, maxResults);
-        if (unlinkedSearchResult?.error) {
-          unlinkedError = unlinkedSearchResult.error;
-        } else {
-          const allLines = Array.isArray(unlinkedSearchResult?.lines) ? unlinkedSearchResult.lines : [];
-
-          // Filter: keep only lines that mention the record name in plain text
-          // but do NOT already have a ref segment pointing to this record.
-          const candidateLines = [];
-          for (const line of allLines) {
-            if (!line || !line.guid) continue;
-            // Skip lines already in linked references.
-            if (alreadyLinkedLineGuids.has(line.guid)) continue;
-            // Skip lines belonging to the target record itself.
-            const srcGuid = line.record?.guid || null;
-            if (!showSelf && srcGuid === recordGuid) continue;
-            // Check that the line has a text segment containing the name (case-insensitive)
-            // and does NOT have a ref segment pointing to this record.
-            if (this.lineHasRefToRecord(line, recordGuid)) continue;
-            if (!this.lineHasTextMentionOf(line, recordName)) continue;
-            candidateLines.push(line);
-          }
-
-          await Promise.all(candidateLines.map(async (line) => {
-            if (typeof line.getTreeContext === 'function') {
-              try {
-                const ctx = await line.getTreeContext();
-                unlinkedTreeContextMap.set(line.guid, ctx);
-              } catch (e) {}
-            }
-          }));
-
-          unlinkedGroups = this.groupBacklinkLines(candidateLines, recordGuid, { showSelf });
-        }
-      }
-    } catch (e) {
-      unlinkedError = 'Error loading unlinked references.';
-    }
-
-    // Ignore stale refreshes (re-check after async unlinked work).
-    if (!this._panelStates.has(panelId) || state.refreshSeq !== seq) return;
-
     state.lastResults = {
       propertyGroups,
       propertyError,
       linkedGroups,
       linkedError,
-      unlinkedGroups,
-      unlinkedError,
-      unlinkedTreeContextMap,
-      maxResults,
-      treeContextMap
+      maxResults
     };
     this.applyLiveSnapshot(state, this.buildResultsSnapshot(propertyGroups, linkedGroups));
     this.invalidateLinkedContextCache(state);
@@ -1881,9 +1666,6 @@ class Plugin extends AppPlugin {
       this.markStatePendingRemote(state, ev);
       this.scheduleRefreshForPanel(panel, { force: false, reason: 'lineitem.updated' });
     }
-
-    // Debounced refresh for unlinked references on any segment change.
-    this.refreshAllPanels({ force: false, reason: 'lineitem.updated.unlinked' });
   }
 
   handleLineItemCreated(ev) {
@@ -2216,186 +1998,6 @@ class Plugin extends AppPlugin {
       if (rec) out.add(guid);
     }
     return out;
-  }
-
-  // ---------- Unlinked reference helpers ----------
-
-  lineHasRefToRecord(line, recordGuid) {
-    if (!line || !recordGuid) return false;
-    const segments = line.segments || [];
-    for (const seg of segments) {
-      if (seg?.type !== 'ref') continue;
-      const textObj = typeof seg.text === 'string' ? { guid: seg.text } : (seg.text || {});
-      if (textObj.guid === recordGuid) return true;
-    }
-    return false;
-  }
-
-  lineHasTextMentionOf(line, name) {
-    if (!line || !name) return false;
-    const nameLower = name.toLowerCase();
-    const segments = line.segments || [];
-    for (const seg of segments) {
-      if (seg?.type === 'ref') continue;
-      const text = typeof seg.text === 'string' ? seg.text : '';
-      if (text.toLowerCase().includes(nameLower)) return true;
-    }
-    return false;
-  }
-
-  buildReplacedSegments(segments, name, recordGuid) {
-    if (!Array.isArray(segments) || !name || !recordGuid) return segments;
-    const nameLower = name.toLowerCase();
-    const newSegments = [];
-
-    for (const seg of segments) {
-      // Only replace in text-like segments, skip refs and other structured types.
-      if (seg?.type !== 'text' && seg?.type !== 'bold' && seg?.type !== 'italic') {
-        newSegments.push(seg);
-        continue;
-      }
-
-      const text = typeof seg.text === 'string' ? seg.text : '';
-      if (!text || !text.toLowerCase().includes(nameLower)) {
-        newSegments.push(seg);
-        continue;
-      }
-
-      // Split the text around the first occurrence of the name (case-insensitive).
-      const idx = text.toLowerCase().indexOf(nameLower);
-      if (idx === -1) {
-        newSegments.push(seg);
-        continue;
-      }
-
-      const before = text.slice(0, idx);
-      const match = text.slice(idx, idx + name.length);
-      const after = text.slice(idx + name.length);
-
-      if (before) newSegments.push({ type: seg.type, text: before });
-      newSegments.push({ type: 'ref', text: { guid: recordGuid, title: match } });
-      if (after) newSegments.push({ type: seg.type, text: after });
-
-      // Only replace first occurrence per segment.
-      continue;
-    }
-
-    return newSegments;
-  }
-
-  buildReplacedSegmentsAll(segments, name, recordGuid) {
-    if (!Array.isArray(segments) || !name || !recordGuid) return segments;
-    const nameLower = name.toLowerCase();
-    const newSegments = [];
-
-    for (const seg of segments) {
-      if (seg?.type !== 'text' && seg?.type !== 'bold' && seg?.type !== 'italic') {
-        newSegments.push(seg);
-        continue;
-      }
-
-      const text = typeof seg.text === 'string' ? seg.text : '';
-      if (!text || !text.toLowerCase().includes(nameLower)) {
-        newSegments.push(seg);
-        continue;
-      }
-
-      // Replace ALL occurrences of the name in this text segment.
-      let remaining = text;
-      while (remaining.length > 0) {
-        const idx = remaining.toLowerCase().indexOf(nameLower);
-        if (idx === -1) {
-          newSegments.push({ type: seg.type, text: remaining });
-          break;
-        }
-
-        const before = remaining.slice(0, idx);
-        const match = remaining.slice(idx, idx + name.length);
-        remaining = remaining.slice(idx + name.length);
-
-        if (before) newSegments.push({ type: seg.type, text: before });
-        newSegments.push({ type: 'ref', text: { guid: recordGuid, title: match } });
-      }
-
-      continue;
-    }
-
-    return newSegments;
-  }
-
-  async linkUnlinkedReference(state, lineGuid) {
-    const panel = state?.panel || null;
-    const record = panel?.getActiveRecord?.() || null;
-    const recordGuid = record?.guid || null;
-    const recordName = (record?.getName?.() || '').trim();
-    if (!recordGuid || !recordName || !lineGuid) return;
-
-    const line = this.findUnlinkedLineByGuid(state, lineGuid);
-    if (!line || typeof line.setSegments !== 'function') return;
-
-    const newSegments = this.buildReplacedSegments(line.segments || [], recordName, recordGuid);
-    try {
-      await line.setSegments(newSegments);
-    } catch (e) {
-      // ignore
-    }
-
-    this.refreshAllPanels({ force: true, reason: 'unlinked.linked' });
-  }
-
-  async linkAllUnlinkedReferences(state) {
-    const panel = state?.panel || null;
-    const record = panel?.getActiveRecord?.() || null;
-    const recordGuid = record?.guid || null;
-    const recordName = (record?.getName?.() || '').trim();
-    if (!recordGuid || !recordName) return;
-
-    const groups = state?.lastResults?.unlinkedGroups || [];
-    let count = 0;
-
-    for (const g of groups) {
-      for (const line of g?.lines || []) {
-        if (!line || typeof line.setSegments !== 'function') continue;
-        if (this.lineHasRefToRecord(line, recordGuid)) continue;
-        if (!this.lineHasTextMentionOf(line, recordName)) continue;
-        const newSegments = this.buildReplacedSegmentsAll(line.segments || [], recordName, recordGuid);
-        try {
-          await line.setSegments(newSegments);
-          count++;
-        } catch (e) {
-          // ignore
-        }
-      }
-    }
-
-    if (count > 0) {
-      try {
-        this.ui.addToaster({
-          title: 'Backreferences',
-          message: `Linked ${count} unlinked reference${count === 1 ? '' : 's'}.`,
-          dismissible: true,
-          autoDestroyTime: 2500
-        });
-      } catch (e) {
-        // ignore
-      }
-    }
-
-    this.refreshAllPanels({ force: true, reason: 'unlinked.linked-all' });
-  }
-
-  findUnlinkedLineByGuid(state, lineGuid) {
-    const target = (lineGuid || '').trim();
-    if (!target || !state?.lastResults) return null;
-    const groups = Array.isArray(state.lastResults?.unlinkedGroups) ? state.lastResults.unlinkedGroups : [];
-
-    for (const g of groups) {
-      for (const line of g?.lines || []) {
-        if ((line?.guid || '') === target) return line;
-      }
-    }
-
-    return null;
   }
 
   // ---------- Grouping + rendering ----------
@@ -2756,7 +2358,7 @@ class Plugin extends AppPlugin {
     state.bodyEl.appendChild(el);
   }
 
-  renderReferences(state, { propertyGroups, propertyError, linkedGroups, linkedError, unlinkedGroups, unlinkedError, unlinkedTreeContextMap, maxResults, treeContextMap }) {
+  renderReferences(state, { propertyGroups, propertyError, linkedGroups, linkedError, maxResults }) {
     if (!state?.bodyEl || !state?.countEl) return;
 
     const body = state.bodyEl;
@@ -2766,18 +2368,15 @@ class Plugin extends AppPlugin {
     const typedPhrase = (state.searchTyped || '').trim().toLowerCase();
     const phrases = typedPhrase ? [...pinnedPhrases, typedPhrase] : pinnedPhrases;
     const query = phrases.join(' ');
+    const queryLower = query;
 
     const propsAll = Array.isArray(propertyGroups) ? propertyGroups : [];
     const linkedAll = Array.isArray(linkedGroups) ? linkedGroups : [];
-    const unlinkedAll = Array.isArray(unlinkedGroups) ? unlinkedGroups : [];
 
     const totalPropRefCount = propsAll.reduce((n, g) => n + (g?.records?.length || 0), 0);
-    const totalLinkedRefCount = this.countActiveLinkedReferences(linkedAll);
-    const totalIgnoredLinkedRefCount = this.countIgnoredLinkedReferences(linkedAll);
-    const totalUnlinkedRefCount = this.countActiveLinkedReferences(unlinkedAll);
-
+    const totalLinkedRefCount = this.countLinkedReferences(linkedAll);
     const hasAnyErrors = Boolean(propertyError || linkedError);
-    const isEmptyWithoutFilter = !hasAnyErrors && totalPropRefCount === 0 && totalLinkedRefCount === 0 && totalUnlinkedRefCount === 0;
+    const isEmptyWithoutFilter = !hasAnyErrors && totalPropRefCount === 0 && totalLinkedRefCount === 0;
     const useCompactEmpty = isEmptyWithoutFilter && phrases.length === 0 && state.emptyStateExpanded !== true;
 
     if (useCompactEmpty) {
@@ -2802,14 +2401,9 @@ class Plugin extends AppPlugin {
       const guid = g?.record?.guid || null;
       if (guid) totalUniquePages.add(guid);
     }
-    for (const g of unlinkedAll) {
-      const guid = g?.record?.guid || null;
-      if (guid) totalUniquePages.add(guid);
-    }
 
     let props = propsAll;
     let linked = linkedAll;
-    let unlinked = unlinkedAll;
 
     if (phrases.length > 0) {
       const allMatch = (text) => phrases.every(p => text.includes(p));
@@ -2838,25 +2432,10 @@ class Plugin extends AppPlugin {
         if (lines.length > 0) nextLinked.push({ record, lines });
       }
       linked = nextLinked;
-
-      const nextUnlinked = [];
-      for (const g of unlinkedAll) {
-        const record = g?.record || null;
-        const recordGuid = record?.guid || null;
-        if (!recordGuid) continue;
-        const lines = (g?.lines || []).filter((line) => {
-          const text = this.segmentsToPlainText(line?.segments || []).toLowerCase();
-          return allMatch(text);
-        });
-        if (lines.length > 0) nextUnlinked.push({ record, lines });
-      }
-      unlinked = nextUnlinked;
     }
 
     const filteredPropRefCount = props.reduce((n, g) => n + (g?.records?.length || 0), 0);
-    const filteredLinkedRefCount = this.countActiveLinkedReferences(linked);
-    const filteredIgnoredLinkedRefCount = this.countIgnoredLinkedReferences(linked);
-    const filteredUnlinkedRefCount = this.countActiveLinkedReferences(unlinked);
+    const filteredLinkedRefCount = this.countLinkedReferences(linked);
 
     const filteredUniquePages = new Set();
     for (const g of props) {
@@ -2869,10 +2448,6 @@ class Plugin extends AppPlugin {
       const guid = g?.record?.guid || null;
       if (guid) filteredUniquePages.add(guid);
     }
-    for (const g of unlinked) {
-      const guid = g?.record?.guid || null;
-      if (guid) filteredUniquePages.add(guid);
-    }
 
     const sortSpec = {
       sortBy: this.normalizeSortBy(state?.sortBy) || this._defaultSortBy,
@@ -2881,7 +2456,6 @@ class Plugin extends AppPlugin {
     const sortMetrics = this.computeRecordSortMetrics(props, linked);
     props = this.sortPropertyGroupsForRender(props, sortSpec, sortMetrics);
     linked = this.sortLinkedGroupsForRender(linked, sortSpec, sortMetrics);
-    unlinked = this.sortLinkedGroupsForRender(unlinked, sortSpec, sortMetrics);
 
     const parts = [];
     if (phrases.length > 0) {
@@ -2889,134 +2463,48 @@ class Plugin extends AppPlugin {
       parts.push(`Filter: "${shortQuery}"`);
       if (totalUniquePages.size > 0) parts.push(`${filteredUniquePages.size}/${totalUniquePages.size} pages`);
       if (totalPropRefCount > 0) parts.push(`${filteredPropRefCount}/${totalPropRefCount} prop refs`);
-      if (totalLinkedRefCount > 0) parts.push(`${filteredLinkedRefCount}/${totalLinkedRefCount} linked`);
-      if (totalIgnoredLinkedRefCount > 0) parts.push(`${filteredIgnoredLinkedRefCount}/${totalIgnoredLinkedRefCount} ignored`);
-      if (totalUnlinkedRefCount > 0) parts.push(`${filteredUnlinkedRefCount}/${totalUnlinkedRefCount} unlinked`);
+      if (totalLinkedRefCount > 0) parts.push(`${filteredLinkedRefCount}/${totalLinkedRefCount} line refs`);
     } else {
       if (totalUniquePages.size > 0) parts.push(`${totalUniquePages.size} page${totalUniquePages.size === 1 ? '' : 's'}`);
       if (totalPropRefCount > 0) parts.push(`${totalPropRefCount} prop ref${totalPropRefCount === 1 ? '' : 's'}`);
-      if (totalLinkedRefCount > 0) parts.push(`${totalLinkedRefCount} linked`);
-      if (totalIgnoredLinkedRefCount > 0) parts.push(`${totalIgnoredLinkedRefCount} ignored`);
-      if (totalUnlinkedRefCount > 0) parts.push(`${totalUnlinkedRefCount} unlinked`);
+      if (totalLinkedRefCount > 0) parts.push(`${totalLinkedRefCount} line ref${totalLinkedRefCount === 1 ? '' : 's'}`);
     }
     state.countEl.textContent = parts.join(' | ');
 
-    // --- Property References Section ---
-    const propBlock = this.buildSectionBlock({
-      sectionKey: 'property',
-      title: 'Property References',
-      count: filteredPropRefCount,
-      collapsed: this._propertyRefsCollapsed,
-      toggleAction: 'toggle-property-refs'
-    });
-    body.appendChild(propBlock);
-    const propBody = propBlock.querySelector('.tlr-section-body');
+    this.appendSectionTitle(body, 'Property References');
     if (propertyError) {
-      this.appendError(propBody, propertyError);
+      this.appendError(body, propertyError);
     } else if (props.length === 0) {
-      this.appendEmpty(propBody, phrases.length > 0 ? 'No matching property references.' : 'No property references.');
+      this.appendEmpty(body, queryLower ? 'No matching property references.' : 'No property references.');
     } else {
-      this.appendPropertyReferenceGroups(propBody, props, { query });
+      this.appendPropertyReferenceGroups(body, props, { query, state });
     }
 
-    // --- Linked References Section ---
-    const linkedBlock = this.buildSectionBlock({
-      sectionKey: 'linked',
-      title: 'Linked References',
-      count: filteredLinkedRefCount,
-      collapsed: this._linkedRefsCollapsed,
-      toggleAction: 'toggle-linked-refs'
-    });
-    body.appendChild(linkedBlock);
-    const linkedBody = linkedBlock.querySelector('.tlr-section-body');
+    const divider = document.createElement('div');
+    divider.className = 'tlr-divider';
+    body.appendChild(divider);
+    this.appendSectionTitle(body, 'Linked References');
+
     if (linkedError) {
-      this.appendError(linkedBody, linkedError);
-    } else {
-      this.appendLinkedReferenceGroups(linkedBody, linked, {
-        maxResults,
-        query,
-        totalLineCount: totalLinkedRefCount,
-        emptyMessage: phrases.length > 0 ? 'No matching linked references.' : 'No linked references.',
-        treeContextMap: treeContextMap || new Map()
-      });
+      this.appendError(body, linkedError);
+      return;
     }
 
-    // --- Unlinked References Section ---
-    const unlinkedBlock = this.buildSectionBlock({
-      sectionKey: 'unlinked',
-      title: 'Unlinked References',
-      count: filteredUnlinkedRefCount,
-      collapsed: this._unlinkedCollapsed,
-      toggleAction: 'toggle-unlinked',
-      extraHeaderContent: (filteredUnlinkedRefCount > 1) ? this.buildLinkAllButton() : null
+    this.appendLinkedReferenceGroups(body, linked, {
+      state,
+      maxResults,
+      query,
+      totalLineCount: totalLinkedRefCount,
+      emptyMessage: queryLower ? 'No matching linked references.' : 'No linked references.'
     });
-    body.appendChild(unlinkedBlock);
-    const unlinkedBody = unlinkedBlock.querySelector('.tlr-section-body');
-    if (unlinkedError) {
-      this.appendError(unlinkedBody, unlinkedError);
-    } else if (unlinked.length === 0) {
-      this.appendEmpty(unlinkedBody, phrases.length > 0 ? 'No matching unlinked references.' : 'No unlinked references.');
-    } else {
-      this.appendUnlinkedReferenceGroups(unlinkedBody, unlinked, {
-        query,
-        treeContextMap: unlinkedTreeContextMap || new Map()
-      });
-    }
   }
 
-  buildSectionBlock({ sectionKey, title, count, collapsed, toggleAction, extraHeaderContent }) {
-    const block = document.createElement('div');
-    block.className = 'tlr-section-block';
-    block.dataset.section = sectionKey || '';
-    if (collapsed) block.classList.add('tlr-section-collapsed');
-
-    const header = document.createElement('div');
-    header.className = 'tlr-section-header';
-
-    const toggleBtn = document.createElement('button');
-    toggleBtn.type = 'button';
-    toggleBtn.className = 'tlr-section-toggle button-none button-small button-minimal-hover';
-    toggleBtn.dataset.action = toggleAction || '';
-    toggleBtn.title = `Collapse/expand ${(title || '').toLowerCase()}`;
-
-    const caret = document.createElement('span');
-    caret.className = 'tlr-section-caret';
-    caret.setAttribute('aria-hidden', 'true');
-    toggleBtn.appendChild(caret);
-
-    const titleEl = document.createElement('span');
-    titleEl.className = 'tlr-section-label';
-    titleEl.textContent = title || '';
-    toggleBtn.appendChild(titleEl);
-
-    const countEl = document.createElement('span');
-    countEl.className = 'tlr-section-count text-details';
-    countEl.textContent = (typeof count === 'number' && count > 0) ? `${count}` : '0';
-
-    header.appendChild(toggleBtn);
-    header.appendChild(countEl);
-
-    if (extraHeaderContent instanceof HTMLElement) {
-      header.appendChild(extraHeaderContent);
-    }
-
-    block.appendChild(header);
-
-    const bodyEl = document.createElement('div');
-    bodyEl.className = 'tlr-section-body';
-    block.appendChild(bodyEl);
-
-    return block;
-  }
-
-  buildLinkAllButton() {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'tlr-link-all-btn button-none button-small button-minimal-hover';
-    btn.dataset.action = 'link-all-unlinked';
-    btn.title = 'Convert all unlinked mentions to linked references';
-    btn.textContent = 'Link All';
-    return btn;
+  appendSectionTitle(container, text) {
+    if (!container) return;
+    const el = document.createElement('div');
+    el.className = 'tlr-section-title text-details';
+    el.textContent = text || '';
+    container.appendChild(el);
   }
 
   appendError(container, message) {
@@ -3150,40 +2638,25 @@ class Plugin extends AppPlugin {
       const recordGuid = record?.guid || null;
       if (!recordGuid) continue;
 
-      const isCollapsed = this.isRecordGroupCollapsed(recordGuid);
-
       const groupEl = document.createElement('div');
       groupEl.className = 'tlr-group';
-      groupEl.dataset.recordGuid = recordGuid;
-      if (isCollapsed) groupEl.classList.add('tlr-group-collapsed');
 
-      const header = document.createElement('div');
-      header.className = 'tlr-group-header-pill button-normal button-normal-hover';
-      header.dataset.action = 'toggle-record-group';
+      const header = document.createElement('button');
+      header.type = 'button';
+      header.className = 'tlr-group-header button-normal button-normal-hover';
+      header.dataset.action = 'open-record';
       header.dataset.recordGuid = recordGuid;
-      header.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
 
-      const caret = document.createElement('span');
-      caret.className = 'tlr-group-caret';
-      caret.setAttribute('aria-hidden', 'true');
+      const title = document.createElement('div');
+      title.className = 'tlr-group-title';
+      title.textContent = record.getName?.() || 'Untitled';
 
-      const titleBtn = document.createElement('span');
-      titleBtn.className = 'tlr-group-title-btn';
-      titleBtn.dataset.action = 'open-record';
-      titleBtn.dataset.recordGuid = recordGuid;
+      const meta = document.createElement('div');
+      meta.className = 'tlr-group-meta text-details';
+      meta.textContent = `${(g.lines || []).length}`;
 
-      const groupTitle = document.createElement('div');
-      groupTitle.className = 'tlr-group-title';
-      groupTitle.textContent = record.getName?.() || 'Untitled';
-      titleBtn.appendChild(groupTitle);
-
-      const groupMeta = document.createElement('div');
-      groupMeta.className = 'tlr-group-meta text-details';
-      groupMeta.textContent = `${g.lines?.length || 0}`;
-
-      header.appendChild(caret);
-      header.appendChild(titleBtn);
-      header.appendChild(groupMeta);
+      header.appendChild(title);
+      header.appendChild(meta);
 
       const linesEl = document.createElement('div');
       linesEl.className = 'tlr-lines';
@@ -3244,101 +2717,6 @@ class Plugin extends AppPlugin {
       note.className = 'tlr-note';
       note.textContent = `Showing first ${maxResults} matches.`;
       container.appendChild(note);
-    }
-  }
-
-  appendUnlinkedReferenceGroups(container, groups, opts) {
-    if (!container) return;
-
-    const query = (opts?.query || '').trim();
-
-    for (const g of groups) {
-      const record = g.record || null;
-      const recordGuid = record?.guid || null;
-      if (!recordGuid) continue;
-
-      const isCollapsed = this.isRecordGroupCollapsed(recordGuid);
-
-      const groupEl = document.createElement('div');
-      groupEl.className = 'tlr-group';
-      groupEl.dataset.recordGuid = recordGuid;
-      if (isCollapsed) groupEl.classList.add('tlr-group-collapsed');
-
-      const header = document.createElement('div');
-      header.className = 'tlr-group-header-pill button-normal button-normal-hover';
-      header.dataset.action = 'toggle-record-group';
-      header.dataset.recordGuid = recordGuid;
-      header.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
-
-      const caret = document.createElement('span');
-      caret.className = 'tlr-group-caret';
-      caret.setAttribute('aria-hidden', 'true');
-
-      const titleBtn = document.createElement('span');
-      titleBtn.className = 'tlr-group-title-btn';
-      titleBtn.dataset.action = 'open-record';
-      titleBtn.dataset.recordGuid = recordGuid;
-
-      const groupTitle = document.createElement('div');
-      groupTitle.className = 'tlr-group-title';
-      groupTitle.textContent = record.getName?.() || 'Untitled';
-      titleBtn.appendChild(groupTitle);
-
-      const groupMeta = document.createElement('div');
-      groupMeta.className = 'tlr-group-meta text-details';
-      groupMeta.textContent = `${g.lines?.length || 0}`;
-
-      header.appendChild(caret);
-      header.appendChild(titleBtn);
-      header.appendChild(groupMeta);
-
-      const linesEl = document.createElement('div');
-      linesEl.className = 'tlr-lines';
-
-      for (const line of g.lines || []) {
-        const blockEl = document.createElement('div');
-        blockEl.className = 'tlr-line-block';
-
-        const lineRow = document.createElement('div');
-        lineRow.className = 'tlr-unlinked-line-row';
-
-        const lineEl = document.createElement('button');
-        lineEl.type = 'button';
-        lineEl.className = 'tlr-line button-none button-minimal-hover';
-        lineEl.dataset.action = 'open-line';
-        lineEl.dataset.recordGuid = recordGuid;
-        lineEl.dataset.lineGuid = line.guid;
-
-        const prefix = this.getLinePrefix(line);
-        if (prefix) {
-          const p = document.createElement('span');
-          p.className = 'tlr-prefix';
-          p.textContent = prefix;
-          lineEl.appendChild(p);
-        }
-
-        const content = document.createElement('span');
-        content.className = 'tlr-line-content';
-        this.appendSegments(content, line.segments || [], query);
-        lineEl.appendChild(content);
-
-        const linkBtn = document.createElement('button');
-        linkBtn.type = 'button';
-        linkBtn.className = 'tlr-link-btn button-none button-small button-minimal-hover';
-        linkBtn.dataset.action = 'link-unlinked';
-        linkBtn.dataset.lineGuid = line.guid;
-        linkBtn.title = 'Convert this mention to a linked reference';
-        linkBtn.textContent = 'Link';
-
-        lineRow.appendChild(lineEl);
-        lineRow.appendChild(linkBtn);
-        blockEl.appendChild(lineRow);
-        linesEl.appendChild(blockEl);
-      }
-
-      groupEl.appendChild(header);
-      groupEl.appendChild(linesEl);
-      container.appendChild(groupEl);
     }
   }
 
@@ -3544,9 +2922,8 @@ class Plugin extends AppPlugin {
       }
 
       if (seg.type === 'ref') {
-        const textObj = typeof seg.text === 'string' ? { guid: seg.text } : (seg.text || {});
-        const guid = textObj.guid || null;
-        const title = textObj.title || (guid ? this.resolveRecordName(guid) : '') || '[link]';
+        const guid = seg.text?.guid || null;
+        const title = seg.text?.title || (guid ? this.resolveRecordName(guid) : '') || '';
         out += title;
         continue;
       }
@@ -3574,23 +2951,24 @@ class Plugin extends AppPlugin {
 
     const hayLower = s.toLowerCase();
 
-    // Build a sorted list of [start, end] match ranges for all phrases
+    // Build merged highlight ranges for all phrases.
     const ranges = [];
     for (const needle of phrases) {
-      let idx = 0;
-      while (idx < s.length) {
-        const next = hayLower.indexOf(needle, idx);
-        if (next === -1) break;
-        ranges.push([next, next + needle.length]);
-        idx = next + needle.length;
+      let i = 0;
+      while (i < s.length) {
+        const pos = hayLower.indexOf(needle, i);
+        if (pos === -1) break;
+        ranges.push([pos, pos + needle.length]);
+        i = pos + needle.length;
       }
     }
+
     if (ranges.length === 0) {
       container.appendChild(document.createTextNode(s));
       return;
     }
 
-    // Sort and merge overlapping ranges
+    // Sort and merge overlapping ranges.
     ranges.sort((a, b) => a[0] - b[0]);
     const merged = [ranges[0]];
     for (let i = 1; i < ranges.length; i++) {
@@ -3602,16 +2980,16 @@ class Plugin extends AppPlugin {
       }
     }
 
-    let pos = 0;
+    let idx = 0;
     for (const [start, end] of merged) {
-      if (start > pos) container.appendChild(document.createTextNode(s.slice(pos, start)));
+      if (start > idx) container.appendChild(document.createTextNode(s.slice(idx, start)));
       const mark = document.createElement('mark');
       mark.className = 'tlr-search-mark';
       mark.textContent = s.slice(start, end);
       container.appendChild(mark);
-      pos = end;
+      idx = end;
     }
-    if (pos < s.length) container.appendChild(document.createTextNode(s.slice(pos)));
+    if (idx < s.length) container.appendChild(document.createTextNode(s.slice(idx)));
   }
 
   appendSegments(container, segments, query) {
@@ -3701,15 +3079,14 @@ class Plugin extends AppPlugin {
       }
 
       if (seg.type === 'ref') {
-        const textObj = typeof seg.text === 'string' ? { guid: seg.text } : (seg.text || {});
-        const guid = textObj.guid || null;
+        const guid = seg.text?.guid || null;
         if (!guid) continue;
         const el = document.createElement('span');
         el.className = 'tlr-seg-ref';
         el.dataset.action = 'open-ref';
         el.dataset.refGuid = guid;
 
-        const title = textObj.title || this.resolveRecordName(guid) || '[link]';
+        const title = seg.text?.title || this.resolveRecordName(guid) || '[link]';
         el.textContent = '';
         this.appendHighlightedText(el, title, query);
         container.appendChild(el);
@@ -3725,34 +3102,7 @@ class Plugin extends AppPlugin {
 
   resolveRecordName(guid) {
     const rec = this.data.getRecord?.(guid) || null;
-    const name = rec?.getName?.() || null;
-    if (name) return name;
-    const fromCache = this._collectionRecordNameCache?.get?.(guid) || null;
-    if (fromCache) return fromCache;
-    return `[Unknown: ${guid}]`;
-  }
-
-  async rebuildCollectionRecordNameCache() {
-    const cache = new Map();
-    try {
-      const collections = await this.data.getAllCollections?.() || [];
-      for (const col of collections) {
-        try {
-          const records = await col.getAllRecords?.() || [];
-          for (const r of records) {
-            const g = r?.guid || null;
-            if (!g) continue;
-            const n = r?.getName?.() || null;
-            if (n) cache.set(g, n);
-          }
-        } catch (e) {
-          // ignore individual collection errors
-        }
-      }
-    } catch (e) {
-      // ignore
-    }
-    this._collectionRecordNameCache = cache;
+    return rec?.getName?.() || null;
   }
 
   formatMention(userGuid) {
@@ -4019,55 +3369,6 @@ class Plugin extends AppPlugin {
         color: var(--text-muted, rgba(0, 0, 0, 0.6));
       }
 
-      .tlr-chips-row {
-        display: none;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 4px;
-        padding: 4px 10px;
-        border-bottom: 1px solid var(--divider-color, var(--border-subtle, rgba(0,0,0,0.08)));
-        background: var(--bg-panel, transparent);
-      }
-
-      .tlr-chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 2px;
-        padding: 2px 4px 2px 8px;
-        border-radius: 10px;
-        background: var(--accent, var(--link-color, #4a90d9));
-        color: #fff;
-        font-size: 11px;
-        line-height: 16px;
-        white-space: nowrap;
-      }
-
-      .tlr-chip-label {
-        max-width: 120px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-
-      .tlr-chip-remove {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 14px;
-        height: 14px;
-        border-radius: 50%;
-        font-size: 13px;
-        line-height: 1;
-        color: rgba(255,255,255,0.8);
-        cursor: pointer;
-        padding: 0;
-      }
-
-      .tlr-chip-remove:hover {
-        color: #fff;
-        background: rgba(0,0,0,0.2);
-      }
-
       .tlr-toggle {
         width: 26px;
         padding: 4px 0;
@@ -4106,68 +3407,19 @@ class Plugin extends AppPlugin {
         flex: 0 0 auto;
       }
 
-      .tlr-section-block {
-        margin-top: 6px;
-      }
-
-      .tlr-section-block + .tlr-section-block {
-        margin-top: 2px;
-        padding-top: 6px;
-        border-top: 1px solid var(--divider-color, var(--border-subtle, rgba(0, 0, 0, 0.12)));
-      }
-
-      .tlr-section-header {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        min-height: 30px;
-      }
-
-      .tlr-section-toggle {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 3px 6px;
-      }
-
-      .tlr-section-caret {
-        width: 0;
-        height: 0;
-        border-top: 5px solid transparent;
-        border-bottom: 5px solid transparent;
-        border-left: 6px solid var(--text-muted, rgba(0, 0, 0, 0.6));
-        opacity: 0.85;
-        transform: rotate(90deg);
-        transition: transform 140ms ease;
-        flex: 0 0 auto;
-      }
-
-      .tlr-section-collapsed .tlr-section-caret {
-        transform: rotate(0deg);
-      }
-
-      .tlr-section-label {
+      .tlr-section-title {
+        margin-top: 16px;
+        margin-bottom: 8px;
         font-size: 12px;
         font-weight: 650;
         color: var(--text-muted, rgba(0, 0, 0, 0.6));
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        white-space: nowrap;
+        text-transform: none;
+        letter-spacing: 0;
       }
 
-      .tlr-section-count {
-        color: var(--text-muted, rgba(0, 0, 0, 0.6));
-        font-size: 11px;
-        font-variant-numeric: tabular-nums;
-        opacity: 0.8;
-      }
-
-      .tlr-section-body {
-        display: block;
-      }
-
-      .tlr-section-collapsed .tlr-section-body {
-        display: none;
+      .tlr-divider {
+        margin: 14px 0 10px;
+        border-top: 1px solid var(--divider-color, var(--border-subtle, rgba(0, 0, 0, 0.12)));
       }
 
       .tlr-prop-group { margin: 12px 0 16px; }
@@ -4240,45 +3492,14 @@ class Plugin extends AppPlugin {
 
       .tlr-group { margin: 12px 0 16px; }
 
-      .tlr-group-header-pill {
+      .tlr-group-header {
+        width: 100%;
         display: flex;
         align-items: center;
-        justify-content: flex-start;
+        justify-content: space-between;
         gap: 10px;
-        width: 100%;
         padding: 8px 10px;
         text-align: left;
-        cursor: pointer;
-      }
-
-      .tlr-group-caret {
-        width: 0;
-        height: 0;
-        border-top: 5px solid transparent;
-        border-bottom: 5px solid transparent;
-        border-left: 6px solid var(--text-muted, rgba(0, 0, 0, 0.6));
-        opacity: 0.85;
-        transform: rotate(90deg);
-        transition: transform 140ms ease;
-        flex: 0 0 auto;
-      }
-
-      .tlr-group-collapsed .tlr-group-caret {
-        transform: rotate(0deg);
-      }
-
-      .tlr-group-collapsed .tlr-lines {
-        display: none;
-      }
-
-      .tlr-group-title-btn {
-        flex: 1 1 auto;
-        min-width: 0;
-        display: flex;
-        align-items: center;
-        padding: 0;
-        margin: 0;
-        cursor: pointer;
       }
 
       .tlr-group-title {
@@ -4294,57 +3515,9 @@ class Plugin extends AppPlugin {
         color: var(--text-muted, rgba(0, 0, 0, 0.6));
         font-size: 12px;
         flex: 0 0 auto;
-        margin-left: auto;
       }
 
-      .tlr-lines { margin-top: 8px; display: flex; flex-direction: column; gap: 12px; }
-
-      .tlr-line-block {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-        width: 100%;
-      }
-
-      .tlr-breadcrumbs {
-        font-size: 12px;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        opacity: 0.8;
-        padding: 0 10px;
-        display: flex;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 2px;
-      }
-
-      .tlr-breadcrumb-item {
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        max-width: 200px;
-      }
-
-      .tlr-breadcrumb-sep {
-        opacity: 0.5;
-        margin: 0 2px;
-      }
-
-      .tlr-descendants {
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-        padding-top: 2px;
-      }
-
-      .tlr-descendant-line {
-        padding: 2px 10px;
-        font-size: 12px;
-        opacity: 0.8;
-        display: flex;
-        align-items: flex-start;
-      }
+      .tlr-lines { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 
       .tlr-line-entry {
         display: flex;
@@ -4520,49 +3693,47 @@ class Plugin extends AppPlugin {
         line-height: inherit;
       }
 
-      .tlr-unlinked-line-row {
-        display: flex;
-        align-items: flex-start;
-        gap: 4px;
-      }
-
-      .tlr-unlinked-line-row > .tlr-line {
-        flex: 1 1 auto;
-        min-width: 0;
-      }
-
-      .tlr-link-btn {
-        flex: 0 0 auto;
-        color: var(--ed-link-color, var(--link-color, var(--accent, inherit)));
-        font-size: 12px;
-        padding: 4px 8px;
-        white-space: nowrap;
-        opacity: 0.7;
-        transition: opacity 120ms ease;
-      }
-
-      .tlr-link-btn:hover {
-        opacity: 1;
-        text-decoration: underline;
-      }
-
-      .tlr-link-all-btn {
-        margin-left: auto;
-        color: var(--ed-link-color, var(--link-color, var(--accent, inherit)));
-        font-size: 12px;
-        padding: 2px 8px;
-        white-space: nowrap;
-        opacity: 0.7;
-        transition: opacity 120ms ease;
-      }
-
-      .tlr-link-all-btn:hover {
-        opacity: 1;
-        text-decoration: underline;
-      }
-
       .tlr-loading .tlr-search-toggle { opacity: 0.6; cursor: default; }
       .tlr-loading .tlr-sort-toggle { opacity: 0.6; cursor: default; }
+
+      .tlr-chips-row {
+        display: none;
+        flex-wrap: wrap;
+        gap: 4px;
+        padding: 4px 12px 6px;
+        align-items: center;
+      }
+
+      .tlr-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        padding: 2px 6px 2px 8px;
+        border-radius: 12px;
+        background: var(--accent, rgba(0,0,0,0.12));
+        color: var(--accent-contrast, inherit);
+        font-size: 11px;
+        line-height: 1.4;
+        max-width: 180px;
+        overflow: hidden;
+      }
+
+      .tlr-chip-label {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .tlr-chip-remove {
+        flex: 0 0 auto;
+        font-size: 13px;
+        line-height: 1;
+        opacity: 0.7;
+        padding: 0 2px;
+        cursor: pointer;
+      }
+
+      .tlr-chip-remove:hover { opacity: 1; }
 
       @media (max-width: 760px) {
         .tlr-header {
