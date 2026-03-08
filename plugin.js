@@ -2580,8 +2580,8 @@ class Plugin extends AppPlugin {
     linked = this.sortLinkedGroupsForRender(linked, sortSpec, sortMetrics);
     unlinked = this.sortLinkedGroupsForRender(unlinked, sortSpec, sortMetrics);
 
-    // Pass all active phrases to highlighting
-    const query = phrases.join(' ');
+    // Pass phrases array directly to highlighting (avoids join/re-split losing multi-word chips)
+    const query = phrases.slice();
 
     const parts = [];
     if (hasFilter) {
@@ -3447,10 +3447,10 @@ class Plugin extends AppPlugin {
     const s = typeof text === 'string' ? text : '';
     if (!s) return;
 
-    // Support space-separated phrases: highlight each at word-start positions only
-    const rawPhrases = typeof query === 'string'
-      ? query.split(' ').map((p) => p.trim()).filter(Boolean)
-      : [];
+    // Accept either a phrases array or a legacy string (split on space)
+    const rawPhrases = Array.isArray(query)
+      ? query.map((p) => String(p).trim()).filter(Boolean)
+      : (typeof query === 'string' ? query.split(' ').map((p) => p.trim()).filter(Boolean) : []);
 
     if (rawPhrases.length === 0) {
       container.appendChild(document.createTextNode(s));
