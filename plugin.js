@@ -2505,6 +2505,12 @@ class Plugin extends AppPlugin {
       const guid = g?.record?.guid || null;
       if (guid) totalUniqueLinkedPages.add(guid);
     }
+    const totalUniqueUnlinkedPages = new Set();
+    for (const g of unlinkedAll) {
+      const guid = g?.record?.guid || null;
+      if (guid) totalUniqueUnlinkedPages.add(guid);
+    }
+    const totalUniquePages = new Set([...totalUniqueLinkedPages, ...totalUniqueUnlinkedPages]);
 
     let props = propsAll;
     let linked = linkedAll;
@@ -2558,6 +2564,12 @@ class Plugin extends AppPlugin {
       const guid = g?.record?.guid || null;
       if (guid) filteredUniqueLinkedPages.add(guid);
     }
+    const filteredUniqueUnlinkedPages = new Set();
+    for (const g of unlinked) {
+      const guid = g?.record?.guid || null;
+      if (guid) filteredUniqueUnlinkedPages.add(guid);
+    }
+    const filteredUniquePages = new Set([...filteredUniqueLinkedPages, ...filteredUniqueUnlinkedPages]);
 
     const sortSpec = {
       sortBy: this.normalizeSortBy(state?.sortBy) || this._defaultSortBy,
@@ -2575,11 +2587,11 @@ class Plugin extends AppPlugin {
     if (hasFilter) {
       const shortDisplay = queryDisplay.length > 30 ? `${queryDisplay.slice(0, 30)}…` : queryDisplay;
       parts.push(`Filter: "${shortDisplay}"`);
-      if (totalUniqueLinkedPages.size > 0) parts.push(`${filteredUniqueLinkedPages.size}/${totalUniqueLinkedPages.size} pages`);
+      if (totalUniquePages.size > 0) parts.push(`${filteredUniquePages.size}/${totalUniquePages.size} pages`);
       if (totalLinkedRefCount > 0) parts.push(`${filteredLinkedRefCount}/${totalLinkedRefCount} linked`);
       if (totalUnlinkedRefCount > 0) parts.push(`${filteredUnlinkedRefCount}/${totalUnlinkedRefCount} unlinked`);
     } else {
-      if (totalUniqueLinkedPages.size > 0) parts.push(`${totalUniqueLinkedPages.size} page${totalUniqueLinkedPages.size === 1 ? '' : 's'}`);
+      if (totalUniquePages.size > 0) parts.push(`${totalUniquePages.size} page${totalUniquePages.size === 1 ? '' : 's'}`);
       if (totalLinkedRefCount > 0) parts.push(`${totalLinkedRefCount} linked`);
       if (totalUnlinkedRefCount > 0) parts.push(`${totalUnlinkedRefCount} unlinked`);
     }
@@ -2761,7 +2773,7 @@ class Plugin extends AppPlugin {
 
         const btn = document.createElement('button');
         btn.type = 'button';
-        btn.className = 'tlr-line button-none button-minimal-hover';
+        btn.className = 'tlr-line button-none';
         btn.dataset.action = 'open-line';
         btn.dataset.recordGuid = recordGuid;
         btn.dataset.lineGuid = line.guid;
@@ -3051,7 +3063,7 @@ class Plugin extends AppPlugin {
 
         const btn = document.createElement('button');
         btn.type = 'button';
-        btn.className = 'tlr-prop-record button-none button-minimal-hover';
+        btn.className = 'tlr-prop-record button-none';
         btn.dataset.action = 'open-record';
         btn.dataset.recordGuid = guid;
         const name = r.getName?.() || 'Untitled';
@@ -3138,7 +3150,7 @@ class Plugin extends AppPlugin {
 
         const lineEl = document.createElement('button');
         lineEl.type = 'button';
-        lineEl.className = 'tlr-line button-none button-minimal-hover';
+        lineEl.className = 'tlr-line button-none';
         lineEl.dataset.action = 'open-line';
         lineEl.dataset.recordGuid = recordGuid;
         lineEl.dataset.lineGuid = line.guid;
