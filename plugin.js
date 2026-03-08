@@ -1,7 +1,7 @@
 class Plugin extends AppPlugin {
   onLoad() {
     // NOTE: Thymer strips top-level code outside the Plugin class.
-    this._version = '0.4.7';
+    this._version = '0.4.8';
     this._pluginName = 'Backreferences';
 
     this._panelStates = new Map();
@@ -35,8 +35,9 @@ class Plugin extends AppPlugin {
 
     this._defaultMaxResults = 200;
     this._refreshDebounceMs = 350;
-    this._sharedIgnoreMetaKey = 'plugin.refs.v1.ignore';
-    this._collectionRecordNameCache = new Map();
+    this._legacyIgnoreMetaKey = 'plugin.refs.v1.ignore';
+    this._storageKeyIgnoreCleanupDone = 'thymer_backreferences_ignore_cleanup_v1';
+    this._ignoreCleanupPromise = null;
 
     this.injectCss();
 
@@ -48,6 +49,17 @@ class Plugin extends AppPlugin {
         if (panel) this.scheduleRefreshForPanel(panel, { force: true, reason: 'cmdpal' });
       }
     });
+
+    this._statusItem = this.ui.addStatusBarItem({
+      icon: 'ti-link',
+      label: '0',
+      tooltip: 'Backreferences',
+      onClick: () => {
+        const panel = this.ui.getActivePanel();
+        if (panel) this.scheduleRefreshForPanel(panel, { force: true, reason: 'status-item' });
+      }
+    });
+    this._statusItem?.hide?.();
 
     this._eventHandlerIds.push(
       this.events.on('panel.navigated', (ev) => this.handlePanelChanged(ev.panel, 'panel.navigated'))
@@ -63,9 +75,14 @@ class Plugin extends AppPlugin {
     );
 
     // Keep backreferences reasonably fresh when references are created/edited elsewhere.
+    this._eventHandlerIds.push(this.events.on('lineitem.created', (ev) => this.handleLineItemCreated(ev)));
     this._eventHandlerIds.push(this.events.on('lineitem.updated', (ev) => this.handleLineItemUpdated(ev)));
-    this._eventHandlerIds.push(this.events.on('lineitem.deleted', () => this.handleLineItemDeleted()));
+    this._eventHandlerIds.push(this.events.on('lineitem.moved', (ev) => this.handleLineItemMoved(ev)));
+    this._eventHandlerIds.push(this.events.on('lineitem.undeleted', (ev) => this.handleLineItemUndeleted(ev)));
+    this._eventHandlerIds.push(this.events.on('lineitem.deleted', (ev) => this.handleLineItemDeleted(ev)));
+    this._eventHandlerIds.push(this.events.on('record.created', (ev) => this.handleRecordCreated(ev)));
     this._eventHandlerIds.push(this.events.on('record.updated', (ev) => this.handleRecordUpdated(ev)));
+    this._eventHandlerIds.push(this.events.on('record.moved', (ev) => this.handleRecordMoved(ev)));
 
     const panel = this.ui.getActivePanel();
     if (panel) this.handlePanelChanged(panel, 'initial');
@@ -73,6 +90,11 @@ class Plugin extends AppPlugin {
       const p = this.ui.getActivePanel();
       if (p) this.handlePanelChanged(p, 'initial-delayed');
     }, 250);
+    setTimeout(() => {
+      this.runIgnoreCleanupMigrationIfNeeded().catch(() => {
+        // ignore
+      });
+    }, 900);
   }
 
   onUnload() {
@@ -86,6 +108,7 @@ class Plugin extends AppPlugin {
     this._eventHandlerIds = [];
 
     this._cmdRefresh?.remove?.();
+    this._statusItem?.remove?.();
 
     for (const panelId of Array.from(this._panelStates?.keys?.() || [])) {
       this.disposePanelState(panelId);
@@ -102,12 +125,14 @@ class Plugin extends AppPlugin {
     const panelEl = panel?.getElement?.() || null;
     if (this.shouldSuppressInPanel(panel, panelEl)) {
       this.disposePanelState(panelId);
+      this.syncStatusItem();
       return;
     }
 
     const mountContainer = this.findMountContainer(panelEl);
     if (!mountContainer) {
       this.disposePanelState(panelId);
+      this.syncStatusItem();
       return;
     }
 
@@ -117,6 +142,7 @@ class Plugin extends AppPlugin {
     if (!recordGuid) {
       // If the panel no longer shows a record, remove our footer.
       this.disposePanelState(panelId);
+      this.syncStatusItem();
       return;
     }
 
@@ -125,6 +151,14 @@ class Plugin extends AppPlugin {
     state.recordGuid = recordGuid;
 
     if (recordChanged || !this.isValidSortBy(state.sortBy) || !this.isValidSortDir(state.sortDir)) {
+      state.emptyStateExpanded = false;
+      state.linkedContextByLine = new Map();
+      state.liveBaselineSnapshot = null;
+      state.liveCurrentSnapshot = null;
+      state.liveNewKeys = new Set();
+      state.liveRemoteBadgesByKey = new Map();
+      state.pendingRemoteSync = false;
+      state.pendingRemoteUsers = new Set();
       const pref = this.getSortPreferenceForRecord(recordGuid);
       state.sortBy = pref.sortBy;
       state.sortDir = pref.sortDir;
@@ -138,6 +172,7 @@ class Plugin extends AppPlugin {
       force: recordChanged,
       reason: reason || (recordChanged ? 'record-changed' : 'record-same')
     });
+    this.syncStatusItem();
   }
 
   shouldSuppressInPanel(panel, panelEl) {
@@ -156,6 +191,7 @@ class Plugin extends AppPlugin {
     const panelId = panel?.getId?.() || null;
     if (!panelId) return;
     this.disposePanelState(panelId);
+    this.syncStatusItem();
   }
 
   getOrCreatePanelState(panel) {
@@ -177,6 +213,14 @@ class Plugin extends AppPlugin {
         searchPhrases: [],
         searchTyped: '',
         searchOpen: false,
+        emptyStateExpanded: false,
+        linkedContextByLine: new Map(),
+        liveBaselineSnapshot: null,
+        liveCurrentSnapshot: null,
+        liveNewKeys: new Set(),
+        liveRemoteBadgesByKey: new Map(),
+        pendingRemoteSync: false,
+        pendingRemoteUsers: new Set(),
         sortBy: this._defaultSortBy,
         sortDir: this._defaultSortDir,
         sortMenuOpen: false,
@@ -212,6 +256,14 @@ class Plugin extends AppPlugin {
       searchPhrases: [],
       searchTyped: '',
       searchOpen: false,
+      emptyStateExpanded: false,
+      linkedContextByLine: new Map(),
+      liveBaselineSnapshot: null,
+      liveCurrentSnapshot: null,
+      liveNewKeys: new Set(),
+      liveRemoteBadgesByKey: new Map(),
+      pendingRemoteSync: false,
+      pendingRemoteUsers: new Set(),
       sortBy: this._defaultSortBy,
       sortDir: this._defaultSortDir,
       sortMenuOpen: false,
@@ -699,6 +751,29 @@ class Plugin extends AppPlugin {
       return;
     }
 
+    if (action === 'expand-empty') {
+      if (!state) return;
+      state.emptyStateExpanded = true;
+      this.renderFromCache(state);
+      return;
+    }
+
+    if (
+      action === 'toggle-context-more' ||
+      action === 'toggle-context-above' ||
+      action === 'toggle-context-below'
+    ) {
+      if (!state) return;
+      this.handleLinkedContextAction(
+        state,
+        action,
+        actionEl.dataset.lineGuid || null
+      ).catch(() => {
+        // ignore
+      });
+      return;
+    }
+
     const panel = state?.panel || null;
     if (!panel) return;
 
@@ -714,13 +789,6 @@ class Plugin extends AppPlugin {
       const guid = actionEl.dataset.recordGuid || null;
       const lineGuid = actionEl.dataset.lineGuid || null;
       if (!guid) return;
-      if (e?.altKey === true) {
-        this.setSortMenuOpen(state, false);
-        this.toggleSharedIgnoreForLine(state, lineGuid).catch(() => {
-          // ignore
-        });
-        return;
-      }
       this.setSortMenuOpen(state, false);
       this.openRecord(panel, guid, lineGuid || null, e);
       return;
@@ -1257,6 +1325,346 @@ class Plugin extends AppPlugin {
     this.saveSortByRecordSetting();
   }
 
+  hasCompletedIgnoreCleanupMigration() {
+    try {
+      return localStorage.getItem(this._storageKeyIgnoreCleanupDone) === '1';
+    } catch (e) {
+      // ignore
+    }
+    return false;
+  }
+
+  markIgnoreCleanupMigrationDone() {
+    try {
+      localStorage.setItem(this._storageKeyIgnoreCleanupDone, '1');
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  clearIgnoreCleanupMigrationDone() {
+    try {
+      localStorage.removeItem(this._storageKeyIgnoreCleanupDone);
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  normalizeLegacyIgnoreValue(value) {
+    if (value === true || value === 1) return true;
+    if (typeof value === 'string') {
+      const v = value.trim().toLowerCase();
+      if (v === '1' || v === 'true' || v === 'yes' || v === 'on') return true;
+    }
+    return false;
+  }
+
+  hasLegacyIgnoreMeta(line) {
+    const props = line?.props;
+    if (!props || typeof props !== 'object') return false;
+
+    const direct = props?.[this._legacyIgnoreMetaKey];
+    if (this.normalizeLegacyIgnoreValue(direct)) return true;
+
+    const underscore = props?.plugin_refs_v1_ignore;
+    if (this.normalizeLegacyIgnoreValue(underscore)) return true;
+
+    const nested = props?.plugin?.refs?.v1?.ignore;
+    if (this.normalizeLegacyIgnoreValue(nested)) return true;
+
+    return false;
+  }
+
+  async runIgnoreCleanupMigrationIfNeeded() {
+    if (this.hasCompletedIgnoreCleanupMigration()) return;
+    if (this._ignoreCleanupPromise) return this._ignoreCleanupPromise;
+
+    this._ignoreCleanupPromise = this.cleanupLegacyIgnoreMetadata()
+      .then((result) => {
+        if (result.ok === true) this.markIgnoreCleanupMigrationDone();
+        return result;
+      })
+      .finally(() => {
+        this._ignoreCleanupPromise = null;
+      });
+
+    return this._ignoreCleanupPromise;
+  }
+
+  async cleanupLegacyIgnoreMetadata() {
+    const allRecords = this.data.getAllRecords?.() || [];
+    let removed = 0;
+    let failed = 0;
+    let scanned = 0;
+
+    for (const record of allRecords || []) {
+      if (!record || typeof record.getLineItems !== 'function') continue;
+
+      let items = [];
+      try {
+        items = (await record.getLineItems(false)) || [];
+      } catch (e) {
+        continue;
+      }
+
+      for (const line of items || []) {
+        scanned += 1;
+        if (!this.hasLegacyIgnoreMeta(line)) continue;
+
+        let ok = false;
+        try {
+          ok = (await line.setMetaProperties({
+            [this._legacyIgnoreMetaKey]: null,
+            plugin_refs_v1_ignore: null
+          })) === true;
+        } catch (e) {
+          ok = false;
+        }
+
+        if (ok) removed += 1;
+        else failed += 1;
+      }
+    }
+
+    if (removed > 0) {
+      this.refreshAllPanels({ force: true, reason: 'legacy-ignore-cleanup' });
+    }
+
+    if (removed > 0 || failed > 0) {
+      try {
+        this.ui.addToaster({
+          title: 'Backreferences',
+          message: failed > 0
+            ? `Legacy ignore cleanup removed ${removed} line item${removed === 1 ? '' : 's'}; ${failed} could not be updated.`
+            : `Legacy ignore cleanup removed ${removed} line item${removed === 1 ? '' : 's'}.`,
+          dismissible: true,
+          autoDestroyTime: failed > 0 ? 5200 : 3200
+        });
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    return { ok: failed === 0, removed, failed, scanned };
+  }
+
+  invalidateLinkedContextCache(state) {
+    const map = state?.linkedContextByLine;
+    if (!(map instanceof Map)) return;
+
+    for (const ctx of map.values()) {
+      if (!ctx || typeof ctx !== 'object') continue;
+      ctx.loaded = false;
+      ctx.loading = false;
+      ctx.loadPromise = null;
+      ctx.error = '';
+      ctx.descendants = [];
+      ctx.depthByGuid = {};
+      ctx.aboveItems = [];
+      ctx.belowItems = [];
+    }
+  }
+
+  getPropertySnapshotKey(propertyName, recordGuid) {
+    return `prop:${(propertyName || '').trim()}::${(recordGuid || '').trim()}`;
+  }
+
+  getLinkedSnapshotKey(lineGuid) {
+    return `line:${(lineGuid || '').trim()}`;
+  }
+
+  buildResultsSnapshot(propertyGroups, linkedGroups) {
+    const itemsByKey = new Map();
+    const sourceRecordGuids = new Set();
+    let propertyCount = 0;
+    let linkedCount = 0;
+
+    for (const g of propertyGroups || []) {
+      const propertyName = (g?.propertyName || '').trim();
+      if (!propertyName) continue;
+      for (const record of g?.records || []) {
+        const recordGuid = record?.guid || null;
+        if (!recordGuid) continue;
+        const key = this.getPropertySnapshotKey(propertyName, recordGuid);
+        itemsByKey.set(key, {
+          kind: 'property',
+          key,
+          signature: key,
+          recordGuid,
+          propertyName
+        });
+        sourceRecordGuids.add(recordGuid);
+        propertyCount += 1;
+      }
+    }
+
+    for (const g of linkedGroups || []) {
+      const recordGuid = g?.record?.guid || null;
+      if (!recordGuid) continue;
+      sourceRecordGuids.add(recordGuid);
+      for (const line of g?.lines || []) {
+        const lineGuid = line?.guid || null;
+        if (!lineGuid) continue;
+        const key = this.getLinkedSnapshotKey(lineGuid);
+        itemsByKey.set(key, {
+          kind: 'line',
+          key,
+          signature: `${recordGuid}|${lineGuid}|${this.segmentsToPlainText(line?.segments || [])}|${this.getLineActivityTimestamp(line)}`,
+          recordGuid,
+          lineGuid
+        });
+        linkedCount += 1;
+      }
+    }
+
+    return {
+      itemsByKey,
+      sourceRecordGuids,
+      propertyCount,
+      linkedCount,
+      totalCount: propertyCount + linkedCount,
+      pageCount: sourceRecordGuids.size
+    };
+  }
+
+  diffCurrentSnapshotKeys(prevSnapshot, nextSnapshot) {
+    const changed = new Set();
+    const prevItems = prevSnapshot?.itemsByKey instanceof Map ? prevSnapshot.itemsByKey : new Map();
+    const nextItems = nextSnapshot?.itemsByKey instanceof Map ? nextSnapshot.itemsByKey : new Map();
+
+    for (const [key, nextItem] of nextItems.entries()) {
+      const prevItem = prevItems.get(key) || null;
+      if (!prevItem || prevItem.signature !== nextItem.signature) changed.add(key);
+    }
+
+    return changed;
+  }
+
+  markStatePendingRemote(state, ev) {
+    if (!state || ev?.source?.isLocal !== false) return;
+    state.pendingRemoteSync = true;
+    if (!(state.pendingRemoteUsers instanceof Set)) state.pendingRemoteUsers = new Set();
+
+    const user = typeof ev.getSourceUser === 'function' ? ev.getSourceUser() : null;
+    const name = (user?.getDisplayName?.() || '').trim();
+    if (name) state.pendingRemoteUsers.add(name);
+  }
+
+  markAllStatesPendingRemote(ev) {
+    for (const state of this._panelStates.values()) {
+      this.markStatePendingRemote(state, ev);
+    }
+  }
+
+  getRemoteBadgeTooltip(userNames) {
+    const names = Array.from(userNames || []).filter(Boolean);
+    if (names.length === 1) return `Changed remotely by ${names[0]}`;
+    if (names.length > 1) return `Changed remotely by ${names.join(', ')}`;
+    return 'Changed remotely';
+  }
+
+  applyLiveSnapshot(state, snapshot) {
+    if (!state) return;
+
+    const currentSnapshot = snapshot || this.buildResultsSnapshot([], []);
+    const baseline = state.liveBaselineSnapshot;
+    const previous = state.liveCurrentSnapshot;
+
+    if (!baseline || !previous) {
+      state.liveBaselineSnapshot = currentSnapshot;
+      state.liveCurrentSnapshot = currentSnapshot;
+      state.liveNewKeys = new Set();
+      state.liveRemoteBadgesByKey = new Map();
+      state.pendingRemoteSync = false;
+      state.pendingRemoteUsers = new Set();
+      return;
+    }
+
+    const nextNewKeys = new Set();
+    for (const key of currentSnapshot.itemsByKey.keys()) {
+      if (!baseline.itemsByKey.has(key)) nextNewKeys.add(key);
+    }
+
+    const nextRemoteBadges = state.liveRemoteBadgesByKey instanceof Map
+      ? new Map(state.liveRemoteBadgesByKey)
+      : new Map();
+
+    for (const key of Array.from(nextRemoteBadges.keys())) {
+      if (!currentSnapshot.itemsByKey.has(key)) nextRemoteBadges.delete(key);
+    }
+
+    if (state.pendingRemoteSync === true) {
+      const tooltip = this.getRemoteBadgeTooltip(state.pendingRemoteUsers);
+      for (const key of this.diffCurrentSnapshotKeys(previous, currentSnapshot)) {
+        if (!currentSnapshot.itemsByKey.has(key)) continue;
+        nextRemoteBadges.set(key, tooltip);
+      }
+    }
+
+    state.liveCurrentSnapshot = currentSnapshot;
+    state.liveNewKeys = nextNewKeys;
+    state.liveRemoteBadgesByKey = nextRemoteBadges;
+    state.pendingRemoteSync = false;
+    state.pendingRemoteUsers = new Set();
+  }
+
+  getLiveBadgesForKey(state, itemKey) {
+    const badges = [];
+    if (!state || !itemKey) return badges;
+
+    if (state.liveNewKeys instanceof Set && state.liveNewKeys.has(itemKey)) {
+      badges.push({ label: 'New', className: 'is-new', tooltip: 'Added since this page was opened' });
+    }
+
+    if (state.liveRemoteBadgesByKey instanceof Map && state.liveRemoteBadgesByKey.has(itemKey)) {
+      badges.push({ label: 'Changed', className: 'is-remote', tooltip: state.liveRemoteBadgesByKey.get(itemKey) || 'Changed remotely' });
+    }
+
+    return badges;
+  }
+
+  appendLiveBadges(container, state, itemKey) {
+    if (!container) return;
+
+    for (const badge of this.getLiveBadgesForKey(state, itemKey)) {
+      container.appendChild(document.createTextNode(' '));
+      const el = document.createElement('span');
+      el.className = `tlr-live-badge text-details ${badge.className || ''}`.trim();
+      el.textContent = badge.label;
+      if (badge.tooltip) el.title = badge.tooltip;
+      container.appendChild(el);
+    }
+  }
+
+  syncStatusItem() {
+    const item = this._statusItem || null;
+    if (!item) return;
+
+    const activePanel = this.ui.getActivePanel?.() || null;
+    const panelId = activePanel?.getId?.() || null;
+    const state = panelId ? (this._panelStates.get(panelId) || null) : null;
+    if (!state || !state.liveCurrentSnapshot) {
+      item.hide?.();
+      return;
+    }
+
+    const snapshot = state.liveCurrentSnapshot;
+    item.setLabel?.(`${snapshot.totalCount}`);
+    item.setTooltip?.(`Backreferences: ${snapshot.totalCount} total (${snapshot.pageCount} pages, ${snapshot.propertyCount} property, ${snapshot.linkedCount} linked)`);
+    item.show?.();
+  }
+
+  handleWorkspaceInvalidation(ev, reason) {
+    this.markAllStatesPendingRemote(ev);
+    this.refreshAllPanels({ force: false, reason: reason || 'workspace-invalidated' });
+  }
+
+  snapshotIncludesSourceRecord(state, recordGuid) {
+    const guid = (recordGuid || '').trim();
+    if (!guid) return false;
+    return state?.liveCurrentSnapshot?.sourceRecordGuids?.has?.(guid) === true;
+  }
+
   // ---------- Refresh orchestration ----------
 
   scheduleRefreshForPanel(panel, { force, reason }) {
@@ -1319,34 +1727,23 @@ class Plugin extends AppPlugin {
     await this.rebuildCollectionRecordNameCache();
 
     const query = `@linkto = "${recordGuid}"`;
-    const [searchSettled, propSettled] = await Promise.allSettled([
-      this.data.searchByQuery(query, maxResults),
-      this.getPropertyBacklinkGroups(record, recordGuid, { showSelf })
-    ]);
+    const searchSettled = await Promise.allSettled([
+      this.data.searchByQuery(query, maxResults)
+    ]).then((x) => x[0]);
 
     // Ignore stale refreshes.
     if (!this._panelStates.has(panelId) || state.refreshSeq !== seq) return;
 
     let linkedError = '';
     let linkedGroups = [];
-    const treeContextMap = new Map();
-
+    let propertyCandidateRecords = null;
     if (searchSettled.status === 'fulfilled') {
       const result = searchSettled.value;
       if (result?.error) {
         linkedError = result.error;
       } else {
         const lines = Array.isArray(result?.lines) ? result.lines : [];
-        
-        await Promise.all(lines.map(async (line) => {
-          if (typeof line.getTreeContext === 'function') {
-            try {
-              const ctx = await line.getTreeContext();
-              treeContextMap.set(line.guid, ctx);
-            } catch (e) {}
-          }
-        }));
-
+        propertyCandidateRecords = Array.isArray(result?.records) ? result.records : null;
         linkedGroups = this.groupBacklinkLines(lines, recordGuid, { showSelf });
       }
     } else {
@@ -1355,9 +1752,12 @@ class Plugin extends AppPlugin {
 
     let propertyError = '';
     let propertyGroups = [];
-    if (propSettled.status === 'fulfilled') {
-      propertyGroups = Array.isArray(propSettled.value) ? propSettled.value : [];
-    } else {
+    try {
+      propertyGroups = await this.getPropertyBacklinkGroups(record, recordGuid, {
+        showSelf,
+        candidateRecords: propertyCandidateRecords
+      });
+    } catch (e) {
       propertyError = 'Error loading property references.';
     }
 
@@ -1430,8 +1830,11 @@ class Plugin extends AppPlugin {
       maxResults,
       treeContextMap
     };
+    this.applyLiveSnapshot(state, this.buildResultsSnapshot(propertyGroups, linkedGroups));
+    this.invalidateLinkedContextCache(state);
     this.renderFromCache(state);
     this.setLoadingState(state, false);
+    this.syncStatusItem();
   }
 
   setLoadingState(state, isLoading) {
@@ -1447,104 +1850,171 @@ class Plugin extends AppPlugin {
     // Refresh footers when key-value properties change so property backlinks stay fresh.
     if (!ev) return;
     if (!ev.properties) return;
-    this.refreshAllPanels({ force: false, reason: 'record.updated' });
+    this.handleWorkspaceInvalidation(ev, 'record.updated');
+  }
+
+  handleRecordCreated(ev) {
+    this.handleWorkspaceInvalidation(ev, 'record.created');
+  }
+
+  handleRecordMoved(ev) {
+    this.handleWorkspaceInvalidation(ev, 'record.moved');
   }
 
   handleLineItemUpdated(ev) {
-    if (this.didSharedIgnoreChange(ev)) {
-      this.refreshAllPanels({ force: false, reason: 'lineitem.ignore-change' });
-      return;
-    }
+    if (!ev) return;
 
-    if (!ev?.hasSegments?.() || typeof ev.getSegments !== 'function') return;
-
-    const segments = ev.getSegments() || [];
+    const segments = ev?.hasSegments?.() && typeof ev.getSegments === 'function'
+      ? (ev.getSegments() || [])
+      : [];
     const referenced = this.extractReferencedRecordGuids(segments);
 
-    // For linked references: only refresh panels whose record is referenced.
-    // For unlinked references: any text edit could add/remove a name mention,
-    // so we always do a debounced refresh of all panels.
-    if (referenced.size > 0) {
-      for (const state of this._panelStates.values()) {
-        const panel = state?.panel || null;
-        if (!panel) continue;
-        if (!state.recordGuid) continue;
-        if (!referenced.has(state.recordGuid)) continue;
-        this.scheduleRefreshForPanel(panel, { force: false, reason: 'lineitem.updated' });
-      }
+    for (const state of this._panelStates.values()) {
+      const panel = state?.panel || null;
+      if (!panel) continue;
+      if (!state.recordGuid) continue;
+
+      const hitsTargetRecord = referenced.has(state.recordGuid);
+      const hitsKnownSource = this.snapshotIncludesSourceRecord(state, ev.recordGuid || null);
+      if (!hitsTargetRecord && !hitsKnownSource) continue;
+
+      this.markStatePendingRemote(state, ev);
+      this.scheduleRefreshForPanel(panel, { force: false, reason: 'lineitem.updated' });
     }
 
     // Debounced refresh for unlinked references on any segment change.
     this.refreshAllPanels({ force: false, reason: 'lineitem.updated.unlinked' });
   }
 
-  handleLineItemDeleted() {
+  handleLineItemCreated(ev) {
+    this.handleWorkspaceInvalidation(ev, 'lineitem.created');
+  }
+
+  handleLineItemMoved(ev) {
+    this.handleWorkspaceInvalidation(ev, 'lineitem.moved');
+  }
+
+  handleLineItemUndeleted(ev) {
+    this.handleWorkspaceInvalidation(ev, 'lineitem.undeleted');
+  }
+
+  handleLineItemDeleted(ev) {
     // We don't know which record(s) were referenced by the deleted item.
     // This is rare, so we just refresh all visible footers (debounced).
-    this.refreshAllPanels({ force: false, reason: 'lineitem.deleted' });
+    this.handleWorkspaceInvalidation(ev, 'lineitem.deleted');
   }
 
-  didSharedIgnoreChange(ev) {
-    const mp = ev?.metaProperties;
-    if (!mp || typeof mp !== 'object') return false;
-
-    if (Object.prototype.hasOwnProperty.call(mp, this._sharedIgnoreMetaKey)) return true;
-
-    const nested = mp?.plugin?.refs?.v1;
-    if (nested && Object.prototype.hasOwnProperty.call(nested, 'ignore')) return true;
-
-    return false;
-  }
-
-  normalizeSharedIgnoreValue(value) {
-    if (value === true || value === 1) return true;
-    if (typeof value === 'string') {
-      const v = value.trim().toLowerCase();
-      if (v === '1' || v === 'true' || v === 'yes' || v === 'on') return true;
-    }
-    return false;
-  }
-
-  readSharedIgnoreFromProps(props) {
-    if (!props || typeof props !== 'object') return false;
-
-    const direct = props?.[this._sharedIgnoreMetaKey];
-    if (this.normalizeSharedIgnoreValue(direct)) return true;
-
-    const underscore = props?.plugin_refs_v1_ignore;
-    if (this.normalizeSharedIgnoreValue(underscore)) return true;
-
-    const nested = props?.plugin?.refs?.v1?.ignore;
-    if (this.normalizeSharedIgnoreValue(nested)) return true;
-
-    return false;
-  }
-
-  isLineSharedIgnored(line) {
-    if (!line) return false;
-    return this.readSharedIgnoreFromProps(line?.props || null);
-  }
-
-  countActiveLinkedReferences(groups) {
+  countLinkedReferences(groups) {
     let total = 0;
     for (const g of groups || []) {
       for (const line of g?.lines || []) {
-        if (this.isLineSharedIgnored(line)) continue;
         total += 1;
       }
     }
     return total;
   }
 
-  countIgnoredLinkedReferences(groups) {
-    let total = 0;
-    for (const g of groups || []) {
-      for (const line of g?.lines || []) {
-        if (!this.isLineSharedIgnored(line)) continue;
-        total += 1;
-      }
-    }
-    return total;
+  getLinkedContextState(state, lineGuid) {
+    if (!state) return null;
+    if (!(state.linkedContextByLine instanceof Map)) state.linkedContextByLine = new Map();
+
+    const guid = (lineGuid || '').trim();
+    if (!guid) return null;
+
+    let ctx = state.linkedContextByLine.get(guid) || null;
+    if (ctx) return ctx;
+
+    ctx = {
+      lineGuid: guid,
+      showMoreContext: false,
+      siblingAboveCount: 0,
+      siblingBelowCount: 0,
+      loaded: false,
+      loading: false,
+      loadPromise: null,
+      error: '',
+      descendants: [],
+      depthByGuid: {},
+      aboveItems: [],
+      belowItems: []
+    };
+    state.linkedContextByLine.set(guid, ctx);
+    return ctx;
+  }
+
+  hasRequestedLinkedContext(ctx) {
+    return Boolean(
+      ctx && (ctx.showMoreContext === true || (ctx.siblingAboveCount || 0) > 0 || (ctx.siblingBelowCount || 0) > 0)
+    );
+  }
+
+  getAvailableAboveContextCount(ctx) {
+    if (!ctx || ctx.loaded !== true) return null;
+    return Array.isArray(ctx.aboveItems) ? ctx.aboveItems.length : 0;
+  }
+
+  getAvailableBelowContextCount(ctx) {
+    if (!ctx || ctx.loaded !== true) return null;
+    return Array.isArray(ctx.belowItems) ? ctx.belowItems.length : 0;
+  }
+
+  getVisibleAboveContextItems(ctx) {
+    if (!ctx || ctx.loaded !== true || !Array.isArray(ctx.aboveItems)) return [];
+    const available = this.getAvailableAboveContextCount(ctx) || 0;
+    const count = Math.max(0, Math.min(ctx.siblingAboveCount || 0, available));
+    if (count === 0) return [];
+    const start = Math.max(0, ctx.aboveItems.length - count);
+    return ctx.aboveItems.slice(start);
+  }
+
+  getVisibleBelowContextItems(ctx) {
+    if (!ctx || ctx.loaded !== true || !Array.isArray(ctx.belowItems)) return [];
+    const available = this.getAvailableBelowContextCount(ctx) || 0;
+    const count = Math.max(0, Math.min(ctx.siblingBelowCount || 0, available));
+    if (count === 0) return [];
+    return ctx.belowItems.slice(0, count);
+  }
+
+  hasAnyLinkedContext(ctx) {
+    if (!ctx || ctx.loaded !== true) return false;
+    return Boolean(
+      (ctx.descendants || []).length > 0 ||
+      this.getAvailableAboveContextCount(ctx) > 0 ||
+      this.getAvailableBelowContextCount(ctx) > 0
+    );
+  }
+
+  getAboveToggleLabel(ctx) {
+    const shown = ctx?.siblingAboveCount || 0;
+    const available = this.getAvailableAboveContextCount(ctx);
+    if (shown <= 0) return 'Show above';
+    if (available === null || shown < available) return 'More above';
+    return 'Hide above';
+  }
+
+  getBelowToggleLabel(ctx) {
+    const shown = ctx?.siblingBelowCount || 0;
+    const available = this.getAvailableBelowContextCount(ctx);
+    if (shown <= 0) return 'Show below';
+    if (available === null || shown < available) return 'More below';
+    return 'Hide below';
+  }
+
+  adjustContextWindowCount(current, available) {
+    const now = Math.max(0, current || 0);
+    if (available !== null && available <= 0) return 0;
+    if (now <= 0) return 1;
+    if (available === null) return now + 1;
+    if (now < available) return now + 1;
+    return 0;
+  }
+
+  resetLinkedContextState(ctx) {
+    if (!ctx) return;
+    ctx.showMoreContext = false;
+    ctx.siblingAboveCount = 0;
+    ctx.siblingBelowCount = 0;
+    ctx.error = '';
   }
 
   findLinkedLineByGuid(state, lineGuid) {
@@ -1561,35 +2031,179 @@ class Plugin extends AppPlugin {
     return null;
   }
 
-  async toggleSharedIgnoreForLine(state, lineGuid) {
-    const line = this.findLinkedLineByGuid(state, lineGuid);
-    if (!line || typeof line.setMetaProperty !== 'function') return;
+  async collectDescendantContext(line) {
+    const descendants = [];
+    const depthByGuid = {};
+    const seen = new Set();
 
-    const currentlyIgnored = this.isLineSharedIgnored(line);
-    const nextValue = currentlyIgnored ? null : 1;
+    const walk = async (items, depth) => {
+      for (const item of items || []) {
+        const guid = item?.guid || null;
+        if (!guid) continue;
+        if (seen.has(guid)) continue;
+        seen.add(guid);
+        descendants.push(item);
+        depthByGuid[guid] = depth;
+        let children = [];
+        try {
+          children = (await item.getChildren()) || [];
+        } catch (e) {
+          children = Array.isArray(item?.children) ? item.children : [];
+        }
+        await walk(children, depth + 1);
+      }
+    };
 
-    let ok = false;
+    let rootChildren = [];
     try {
-      ok = (await line.setMetaProperty(this._sharedIgnoreMetaKey, nextValue)) === true;
+      rootChildren = (await line.getChildren()) || [];
     } catch (e) {
-      ok = false;
+      rootChildren = Array.isArray(line?.children) ? line.children : [];
     }
-    if (!ok) return;
 
-    try {
-      this.ui.addToaster({
-        title: 'Backreferences',
-        message: currentlyIgnored
-          ? 'Reference restored to shared counts.'
-          : 'Reference ignored in shared counts.',
-        dismissible: true,
-        autoDestroyTime: 1800
+    await walk(rootChildren, 1);
+    return { descendants, depthByGuid };
+  }
+
+  buildRecordDocumentOrder(record, items) {
+    const recordGuid = record?.guid || null;
+    const list = Array.isArray(items) ? items.filter(Boolean) : [];
+    if (!recordGuid || list.length === 0) return list;
+
+    const childrenByParent = new Map();
+    const visited = new Set();
+    const ordered = [];
+
+    for (const item of list) {
+      const guid = item?.guid || null;
+      if (!guid) continue;
+
+      const parentGuid = typeof item?.parent_guid === 'string' && item.parent_guid
+        ? item.parent_guid
+        : recordGuid;
+      const key = parentGuid === recordGuid ? recordGuid : parentGuid;
+
+      if (!childrenByParent.has(key)) childrenByParent.set(key, []);
+      childrenByParent.get(key).push(item);
+    }
+
+    const walk = (parentGuid) => {
+      const children = childrenByParent.get(parentGuid) || [];
+      for (const item of children) {
+        const guid = item?.guid || null;
+        if (!guid || visited.has(guid)) continue;
+        visited.add(guid);
+        ordered.push(item);
+        walk(guid);
+      }
+    };
+
+    walk(recordGuid);
+
+    for (const item of list) {
+      const guid = item?.guid || null;
+      if (!guid || visited.has(guid)) continue;
+      visited.add(guid);
+      ordered.push(item);
+    }
+
+    return ordered;
+  }
+
+  async ensureLinkedContextLoaded(state, line) {
+    const ctx = this.getLinkedContextState(state, line?.guid || null);
+    if (!ctx || !line) return null;
+    if (ctx.loaded === true) return ctx;
+    if (ctx.loading === true && ctx.loadPromise) return ctx.loadPromise;
+
+    ctx.loading = true;
+    ctx.error = '';
+    this.renderFromCache(state);
+
+    ctx.loadPromise = (async () => {
+      await line.getTreeContext();
+      const descendantContext = await this.collectDescendantContext(line);
+
+      const record = line.getRecord?.() || null;
+      const allItems = record && typeof record.getLineItems === 'function'
+        ? ((await record.getLineItems(false)) || [])
+        : [];
+      const orderedItems = this.buildRecordDocumentOrder(record, allItems);
+      const contextItems = orderedItems.length > 0 ? orderedItems : allItems;
+      const matchedGuid = line?.guid || '';
+      const matchedIndex = contextItems.findIndex((item) => (item?.guid || '') === matchedGuid);
+      const aboveItems = [];
+      const belowItems = [];
+
+      if (matchedIndex >= 0) {
+        let subtreeEndIndex = matchedIndex;
+        const descendantGuids = new Set(
+          (descendantContext.descendants || [])
+            .map((item) => item?.guid || '')
+            .filter(Boolean)
+        );
+
+        for (let i = matchedIndex + 1; i < contextItems.length; i += 1) {
+          const guid = contextItems[i]?.guid || '';
+          if (!guid || !descendantGuids.has(guid)) continue;
+          subtreeEndIndex = i;
+        }
+
+        aboveItems.push(...contextItems.slice(0, matchedIndex));
+        belowItems.push(...contextItems.slice(subtreeEndIndex + 1));
+      }
+
+      ctx.descendants = descendantContext.descendants;
+      ctx.depthByGuid = descendantContext.depthByGuid;
+      ctx.aboveItems = aboveItems;
+      ctx.belowItems = belowItems;
+      ctx.loaded = true;
+
+      const availableAbove = this.getAvailableAboveContextCount(ctx);
+      const availableBelow = this.getAvailableBelowContextCount(ctx);
+      ctx.siblingAboveCount = Math.max(0, Math.min(ctx.siblingAboveCount || 0, availableAbove || 0));
+      ctx.siblingBelowCount = Math.max(0, Math.min(ctx.siblingBelowCount || 0, availableBelow || 0));
+      return ctx;
+    })()
+      .catch(() => {
+        ctx.error = 'Could not load line context.';
+        ctx.loaded = false;
+        return null;
+      })
+      .finally(() => {
+        ctx.loading = false;
+        ctx.loadPromise = null;
+        this.renderFromCache(state);
       });
-    } catch (e) {
-      // ignore
+
+    return ctx.loadPromise;
+  }
+
+  async handleLinkedContextAction(state, action, lineGuid) {
+    const line = this.findLinkedLineByGuid(state, lineGuid);
+    if (!line) return;
+
+    const ctx = this.getLinkedContextState(state, lineGuid);
+    if (!ctx) return;
+
+    if (action === 'toggle-context-more') {
+      if (ctx.showMoreContext === true) {
+        this.resetLinkedContextState(ctx);
+        this.renderFromCache(state);
+        return;
+      }
+      ctx.showMoreContext = true;
+    } else if (action === 'toggle-context-above') {
+      ctx.siblingAboveCount = this.adjustContextWindowCount(ctx.siblingAboveCount, this.getAvailableAboveContextCount(ctx));
+    } else if (action === 'toggle-context-below') {
+      ctx.siblingBelowCount = this.adjustContextWindowCount(ctx.siblingBelowCount, this.getAvailableBelowContextCount(ctx));
+    } else {
+      return;
     }
 
-    this.refreshAllPanels({ force: true, reason: 'line.ignore-toggled' });
+    this.renderFromCache(state);
+    if (!this.hasRequestedLinkedContext(ctx)) return;
+    await this.ensureLinkedContextLoaded(state, line);
   }
 
   extractReferencedRecordGuids(segments) {
@@ -1786,17 +2400,23 @@ class Plugin extends AppPlugin {
 
   // ---------- Grouping + rendering ----------
 
-  async getPropertyBacklinkGroups(_targetRecord, targetGuid, { showSelf }) {
+  async getPropertyBacklinkGroups(_targetRecord, targetGuid, { showSelf, candidateRecords }) {
     if (!targetGuid) return [];
 
-    // NOTE: Thymer's built-in backlinks/backrefs do not include record-link properties,
-    // so we scan all records' properties to find record-link fields pointing at targetGuid.
-    const allRecords = this.data.getAllRecords?.() || [];
+    // searchByQuery("@linkto = ...") already returns page-level matches for property-only
+    // record links in result.records, so we can inspect only those candidates when available.
+    // Fall back to a full scan only if the search result is unavailable.
+    const sourceRecords = Array.isArray(candidateRecords)
+      ? candidateRecords
+      : (this.data.getAllRecords?.() || []);
     const byProp = new Map();
+    const seenSourceGuids = new Set();
 
-    for (const src of allRecords || []) {
+    for (const src of sourceRecords || []) {
       const srcGuid = src?.guid || null;
       if (!srcGuid) continue;
+      if (seenSourceGuids.has(srcGuid)) continue;
+      seenSourceGuids.add(srcGuid);
       if (!showSelf && srcGuid === targetGuid) continue;
 
       const props = src.getAllProperties?.() || [];
@@ -2028,12 +2648,11 @@ class Plugin extends AppPlugin {
       if (!guid) continue;
 
       const lines = Array.isArray(g?.lines) ? g.lines : [];
-      const activeLines = lines.filter((line) => !this.isLineSharedIgnored(line));
-      if (activeLines.length === 0) continue;
-      addReferenceCount(guid, activeLines.length);
+      if (lines.length === 0) continue;
+      addReferenceCount(guid, lines.length);
 
       let newestLineActivity = 0;
-      for (const line of activeLines) {
+      for (const line of lines) {
         const ts = this.getLineActivityTimestamp(line);
         if (ts > newestLineActivity) newestLineActivity = ts;
       }
@@ -2156,6 +2775,21 @@ class Plugin extends AppPlugin {
     const totalLinkedRefCount = this.countActiveLinkedReferences(linkedAll);
     const totalIgnoredLinkedRefCount = this.countIgnoredLinkedReferences(linkedAll);
     const totalUnlinkedRefCount = this.countActiveLinkedReferences(unlinkedAll);
+
+    const hasAnyErrors = Boolean(propertyError || linkedError);
+    const isEmptyWithoutFilter = !hasAnyErrors && totalPropRefCount === 0 && totalLinkedRefCount === 0 && totalUnlinkedRefCount === 0;
+    const useCompactEmpty = isEmptyWithoutFilter && phrases.length === 0 && state.emptyStateExpanded !== true;
+
+    if (useCompactEmpty) {
+      state.rootEl?.classList?.add('tlr-empty-compact');
+      this.setSearchOpen(state, false);
+      this.setSortMenuOpen(state, false);
+      state.countEl.textContent = 'No references yet';
+      this.appendCompactEmptyState(body);
+      return;
+    }
+
+    state.rootEl?.classList?.remove('tlr-empty-compact');
 
     const totalUniquePages = new Set();
     for (const g of propsAll) {
@@ -2401,10 +3035,36 @@ class Plugin extends AppPlugin {
     container.appendChild(el);
   }
 
+  appendCompactEmptyState(container) {
+    if (!container) return;
+
+    const field = document.createElement('div');
+    field.className = 'tlr-empty-compact-card form-field';
+
+    const row = document.createElement('div');
+    row.className = 'tlr-empty-compact-row form-field-row';
+
+    const summary = document.createElement('div');
+    summary.className = 'tlr-empty-compact-copy text-details';
+    summary.textContent = 'No references yet.';
+
+    const expandBtn = document.createElement('button');
+    expandBtn.type = 'button';
+    expandBtn.className = 'tlr-empty-compact-btn button-none button-small button-minimal-hover';
+    expandBtn.dataset.action = 'expand-empty';
+    expandBtn.textContent = 'Show sections';
+
+    row.appendChild(summary);
+    row.appendChild(expandBtn);
+    field.appendChild(row);
+    container.appendChild(field);
+  }
+
   appendPropertyReferenceGroups(container, groups, opts) {
     if (!container) return;
 
     const query = (opts?.query || '').trim();
+    const state = opts?.state || null;
 
     for (const g of groups || []) {
       const propName = (g?.propertyName || '').trim();
@@ -2455,6 +3115,7 @@ class Plugin extends AppPlugin {
         const name = r.getName?.() || 'Untitled';
         btn.textContent = '';
         this.appendHighlightedText(btn, name, query);
+        this.appendLiveBadges(btn, state, this.getPropertySnapshotKey(propName, guid));
         recsEl.appendChild(btn);
       }
 
@@ -2467,6 +3128,7 @@ class Plugin extends AppPlugin {
   appendLinkedReferenceGroups(container, groups, opts) {
     if (!container) return;
 
+    const state = opts?.state || null;
     const maxResults = opts?.maxResults || 0;
     const query = (opts?.query || '').trim();
     const totalLineCount = typeof opts?.totalLineCount === 'number' ? opts.totalLineCount : null;
@@ -2527,32 +3189,17 @@ class Plugin extends AppPlugin {
       linesEl.className = 'tlr-lines';
 
       for (const line of g.lines || []) {
-        const ctx = opts?.treeContextMap?.get?.(line.guid) || null;
-        const ancestors = ctx?.ancestors || [];
-        const descendants = ctx?.descendants || [];
+        const entryEl = document.createElement('div');
+        entryEl.className = 'tlr-line-entry';
 
-        const blockEl = document.createElement('div');
-        blockEl.className = 'tlr-line-block';
-
-        if (ancestors.length > 0) {
-          const breadcrumbsEl = document.createElement('div');
-          breadcrumbsEl.className = 'tlr-breadcrumbs text-details';
-          
-          for (let i = ancestors.length - 1; i >= 0; i--) {
-            const anc = ancestors[i];
-            const ancEl = document.createElement('span');
-            ancEl.className = 'tlr-breadcrumb-item';
-            this.appendSegments(ancEl, anc.segments || [], query);
-            breadcrumbsEl.appendChild(ancEl);
-            if (i > 0) {
-              const sep = document.createElement('span');
-              sep.className = 'tlr-breadcrumb-sep';
-              sep.textContent = ' > ';
-              breadcrumbsEl.appendChild(sep);
-            }
-          }
-          blockEl.appendChild(breadcrumbsEl);
+        const ctx = state ? this.getLinkedContextState(state, line.guid) : null;
+        if (state && ctx && this.hasRequestedLinkedContext(ctx) && ctx.loaded !== true && ctx.loading !== true) {
+          this.ensureLinkedContextLoaded(state, line).catch(() => {
+            // ignore
+          });
         }
+
+        this.appendLinkedContextRows(entryEl, recordGuid, ctx, query, 'top');
 
         const lineEl = document.createElement('button');
         lineEl.type = 'button';
@@ -2560,74 +3207,31 @@ class Plugin extends AppPlugin {
         lineEl.dataset.action = 'open-line';
         lineEl.dataset.recordGuid = recordGuid;
         lineEl.dataset.lineGuid = line.guid;
+        this.appendLineText(lineEl, line, query);
+        this.appendLiveBadges(lineEl, state, this.getLinkedSnapshotKey(line.guid));
+        const mainRowEl = document.createElement('div');
+        mainRowEl.className = 'tlr-line-main';
+        mainRowEl.appendChild(lineEl);
+        entryEl.appendChild(mainRowEl);
 
-        const ignored = this.isLineSharedIgnored(line);
-        if (ignored) lineEl.classList.add('tlr-line-ignored');
-        lineEl.title = ignored
-          ? 'Alt+Click to include this reference again'
-          : 'Alt+Click to ignore this reference in shared counts';
+        if (state && ctx) {
+          mainRowEl.appendChild(this.buildLinkedContextControls(line.guid, ctx));
 
-        const prefix = this.getLinePrefix(line);
-        if (prefix) {
-          const p = document.createElement('span');
-          p.className = 'tlr-prefix';
-          p.textContent = prefix;
-          lineEl.appendChild(p);
-        }
-
-        const content = document.createElement('span');
-        content.className = 'tlr-line-content';
-        this.appendSegments(content, line.segments || [], query);
-        lineEl.appendChild(content);
-
-        if (ignored) {
-          lineEl.appendChild(document.createTextNode(' '));
-          const ignoredFlag = document.createElement('span');
-          ignoredFlag.className = 'tlr-line-ignored-flag text-details';
-          ignoredFlag.textContent = 'Ignored';
-          lineEl.appendChild(ignoredFlag);
-        }
-
-        blockEl.appendChild(lineEl);
-
-        if (descendants.length > 0) {
-          const descEl = document.createElement('div');
-          descEl.className = 'tlr-descendants';
-          
-          // We need to calculate relative depth
-          // Since descendants are in pre-order traversal and have parent_guid, we can compute depths.
-          const depthMap = new Map();
-          depthMap.set(line.guid, 0);
-
-          for (const desc of descendants) {
-            const parentGuid = desc.parent_guid || line.guid;
-            const parentDepth = depthMap.get(parentGuid) ?? 0;
-            const depth = parentDepth + 1;
-            depthMap.set(desc.guid, depth);
-
-            const dEl = document.createElement('div');
-            dEl.className = 'tlr-descendant-line text-details';
-            dEl.style.paddingLeft = `${depth * 16}px`;
-
-            const dPrefix = this.getLinePrefix(desc);
-            if (dPrefix) {
-              const dp = document.createElement('span');
-              dp.className = 'tlr-prefix';
-              dp.textContent = dPrefix;
-              dEl.appendChild(dp);
-            }
-
-            const dContent = document.createElement('span');
-            dContent.className = 'tlr-line-content';
-            this.appendSegments(dContent, desc.segments || [], query);
-            dEl.appendChild(dContent);
-
-            descEl.appendChild(dEl);
+          if (ctx.loading === true) {
+            const loadingEl = document.createElement('div');
+            loadingEl.className = 'tlr-note tlr-context-note';
+            loadingEl.textContent = 'Loading context...';
+            entryEl.appendChild(loadingEl);
+          } else if (ctx.error) {
+            const errorEl = document.createElement('div');
+            errorEl.className = 'tlr-error tlr-context-note';
+            errorEl.textContent = ctx.error;
+            entryEl.appendChild(errorEl);
           }
-          blockEl.appendChild(descEl);
         }
 
-        linesEl.appendChild(blockEl);
+        this.appendLinkedContextRows(entryEl, recordGuid, ctx, query, 'bottom');
+        linesEl.appendChild(entryEl);
       }
 
       groupEl.appendChild(header);
@@ -2692,30 +3296,8 @@ class Plugin extends AppPlugin {
       linesEl.className = 'tlr-lines';
 
       for (const line of g.lines || []) {
-        const ctx = opts?.treeContextMap?.get?.(line.guid) || null;
-        const ancestors = ctx?.ancestors || [];
-
         const blockEl = document.createElement('div');
         blockEl.className = 'tlr-line-block';
-
-        if (ancestors.length > 0) {
-          const breadcrumbsEl = document.createElement('div');
-          breadcrumbsEl.className = 'tlr-breadcrumbs text-details';
-          for (let i = ancestors.length - 1; i >= 0; i--) {
-            const anc = ancestors[i];
-            const ancEl = document.createElement('span');
-            ancEl.className = 'tlr-breadcrumb-item';
-            this.appendSegments(ancEl, anc.segments || [], query);
-            breadcrumbsEl.appendChild(ancEl);
-            if (i > 0) {
-              const sep = document.createElement('span');
-              sep.className = 'tlr-breadcrumb-sep';
-              sep.textContent = ' > ';
-              breadcrumbsEl.appendChild(sep);
-            }
-          }
-          blockEl.appendChild(breadcrumbsEl);
-        }
 
         const lineRow = document.createElement('div');
         lineRow.className = 'tlr-unlinked-line-row';
@@ -2758,6 +3340,155 @@ class Plugin extends AppPlugin {
       groupEl.appendChild(linesEl);
       container.appendChild(groupEl);
     }
+  }
+
+  buildLinkedContextControls(lineGuid, ctx) {
+    const controls = document.createElement('div');
+    controls.className = 'tlr-line-actions text-details';
+
+    const group = document.createElement('div');
+    group.className = 'tlr-line-actions-group';
+
+    if (ctx?.showMoreContext === true) {
+      group.appendChild(this.buildLinkedContextButton('toggle-context-above', lineGuid, {
+        icon: 'up',
+        label: this.getAboveToggleLabel(ctx),
+        disabled: ctx?.loaded === true && this.getAvailableAboveContextCount(ctx) === 0,
+        active: (ctx?.siblingAboveCount || 0) > 0
+      }));
+      group.appendChild(this.buildLinkedContextButton('toggle-context-below', lineGuid, {
+        icon: 'down',
+        label: this.getBelowToggleLabel(ctx),
+        disabled: ctx?.loaded === true && this.getAvailableBelowContextCount(ctx) === 0,
+        active: (ctx?.siblingBelowCount || 0) > 0
+      }));
+    }
+
+    group.appendChild(this.buildLinkedContextButton('toggle-context-more', lineGuid, {
+      icon: 'toggle',
+      label: ctx?.showMoreContext === true ? 'Hide context' : 'Show more context',
+      disabled: ctx?.showMoreContext !== true && ctx?.loaded === true && !this.hasAnyLinkedContext(ctx),
+      active: ctx?.showMoreContext === true
+    }));
+
+    controls.appendChild(group);
+    return controls;
+  }
+
+  buildLinkedContextButton(action, lineGuid, opts) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'tlr-context-btn button-none button-small button-minimal-hover';
+    btn.dataset.action = action;
+    btn.dataset.lineGuid = lineGuid || '';
+    btn.title = opts?.label || '';
+    btn.setAttribute('aria-label', opts?.label || '');
+    btn.classList.add(`tlr-context-btn-${opts?.icon || 'more'}`);
+    if (opts?.active === true) btn.classList.add('is-active');
+    if (opts?.disabled === true) btn.disabled = true;
+
+    btn.appendChild(this.buildLinkedContextGlyph(opts?.icon || 'toggle'));
+    return btn;
+  }
+
+  buildLinkedContextGlyph(icon) {
+    const glyph = document.createElement('span');
+    glyph.className = `tlr-context-glyph tlr-context-glyph-${icon}`;
+    glyph.setAttribute('aria-hidden', 'true');
+
+    const addChevron = (dir) => {
+      let iconEl = null;
+      try {
+        iconEl = this.ui.createIcon(`ti-chevron-${dir}`);
+      } catch (e) {
+        iconEl = null;
+      }
+
+      if (!iconEl) {
+        iconEl = document.createElement('span');
+        iconEl.className = `ti ti-chevron-${dir}`;
+      }
+
+      glyph.appendChild(iconEl);
+    };
+
+    if (icon === 'toggle') {
+      addChevron('up');
+      addChevron('down');
+      return glyph;
+    }
+
+    if (icon === 'up' || icon === 'down') {
+      addChevron(icon);
+      return glyph;
+    }
+
+    return glyph;
+  }
+
+  appendLineText(container, line, query) {
+    if (!container) return;
+
+    const prefix = this.getLinePrefix(line);
+    if (prefix) {
+      const p = document.createElement('span');
+      p.className = 'tlr-prefix';
+      p.textContent = prefix;
+      container.appendChild(p);
+    }
+
+    const content = document.createElement('span');
+    content.className = 'tlr-line-content';
+    this.appendSegments(content, line?.segments || [], query);
+    container.appendChild(content);
+  }
+
+  appendLinkedContextRows(container, recordGuid, ctx, query, position) {
+    if (!container || !ctx || ctx.loaded !== true) return;
+
+    const items = [];
+    if (position === 'top') {
+      for (const line of this.getVisibleAboveContextItems(ctx)) {
+        items.push({ line, indent: 0 });
+      }
+    } else {
+      if (ctx.showMoreContext === true) {
+        for (const line of ctx.descendants || []) {
+          items.push({
+            line,
+            indent: Number(ctx.depthByGuid?.[line?.guid] || 1)
+          });
+        }
+      }
+
+      for (const line of this.getVisibleBelowContextItems(ctx)) {
+        items.push({ line, indent: 0 });
+      }
+    }
+
+    if (items.length === 0) return;
+
+    const list = document.createElement('div');
+    list.className = `tlr-context-list tlr-context-list-${position}`;
+
+    for (const item of items) {
+      const line = item.line || null;
+      const guid = line?.guid || null;
+      if (!guid) continue;
+
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'tlr-context-line button-none button-minimal-hover';
+      row.dataset.action = 'open-line';
+      row.dataset.recordGuid = recordGuid || '';
+      row.dataset.lineGuid = guid;
+      row.style.setProperty('--tlr-context-indent', `${Math.max(0, item.indent || 0) * 12}px`);
+
+      this.appendLineText(row, line, query);
+      list.appendChild(row);
+    }
+
+    if (list.childElementCount > 0) container.appendChild(list);
   }
 
   getLinePrefix(line) {
@@ -3245,6 +3976,16 @@ class Plugin extends AppPlugin {
       .tlr-search-open .tlr-search-wrap { display: flex; }
       .tlr-search-open .tlr-search-toggle { display: none; }
 
+      .tlr-empty-compact .tlr-search-toggle,
+      .tlr-empty-compact .tlr-search-wrap,
+      .tlr-empty-compact .tlr-sort-wrap {
+        display: none !important;
+      }
+
+      .tlr-empty-compact .tlr-header {
+        margin-bottom: 6px;
+      }
+
       .tlr-search-icon {
         display: flex;
         align-items: center;
@@ -3344,6 +4085,25 @@ class Plugin extends AppPlugin {
         color: var(--text-muted, rgba(0, 0, 0, 0.6));
         padding: 8px 0;
         font-size: 12px;
+      }
+
+      .tlr-empty-compact-card {
+        padding: 6px 0 2px;
+      }
+
+      .tlr-empty-compact-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .tlr-empty-compact-copy {
+        min-width: 0;
+      }
+
+      .tlr-empty-compact-btn {
+        flex: 0 0 auto;
       }
 
       .tlr-section-block {
@@ -3586,17 +4346,26 @@ class Plugin extends AppPlugin {
         align-items: flex-start;
       }
 
+      .tlr-line-entry {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .tlr-line-main {
+        display: flex;
+        align-items: flex-start;
+        gap: 4px;
+      }
+
       .tlr-line {
         display: block;
-        width: 100%;
-        padding: 4px 10px;
+        flex: 1 1 auto;
+        min-width: 0;
+        padding: 8px 10px;
         text-align: left;
         color: var(--text, inherit);
         line-height: 1.35;
-      }
-
-      .tlr-line.tlr-line-ignored {
-        opacity: 0.62;
       }
 
       .tlr-prefix {
@@ -3609,9 +4378,120 @@ class Plugin extends AppPlugin {
         line-height: 1.45;
       }
 
-      .tlr-line-ignored-flag {
-        margin-left: 6px;
+      .tlr-line-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 0 0 auto;
+        padding: 8px 10px 0 0;
+      }
+
+      .tlr-line-actions-group {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        margin-left: auto;
+        flex: 0 0 auto;
+      }
+
+      .tlr-context-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        padding: 0;
+        border-radius: 6px;
+        color: var(--text-muted, rgba(0, 0, 0, 0.72));
+      }
+
+      .tlr-context-btn:hover:not(:disabled),
+      .tlr-context-btn.is-active {
+        color: var(--text-default, var(--text, inherit));
+        background: var(--bg-selected, var(--bg-hover, rgba(0, 0, 0, 0.06)));
+      }
+
+      .tlr-context-btn:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+
+      .tlr-context-glyph {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 14px;
+        height: 14px;
+      }
+
+      .tlr-context-glyph > * {
+        width: 14px;
+        height: 14px;
+        flex: 0 0 auto;
+      }
+
+      .tlr-context-glyph .ti {
+        font-size: 14px;
+        line-height: 1;
+      }
+
+      .tlr-context-glyph-toggle {
+        flex-direction: column;
+        gap: 0;
+      }
+
+      .tlr-context-glyph-toggle .ti {
+        font-size: 12px;
+        margin: -3px 0;
+      }
+
+      .tlr-context-glyph-toggle > * {
+        width: 12px;
+        height: 12px;
+      }
+
+      .tlr-context-btn-toggle {
+        width: 26px;
+      }
+
+      .tlr-context-list {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+
+      .tlr-context-line {
+        display: block;
+        width: 100%;
+        padding: 6px 10px 6px calc(10px + var(--tlr-context-indent, 0px));
+        text-align: left;
+        color: var(--text, inherit);
+        line-height: 1.35;
+        border-left: 1px solid var(--divider-color, var(--border-subtle, rgba(0, 0, 0, 0.12)));
+      }
+
+      .tlr-context-note {
+        padding: 0 10px 2px;
+      }
+
+      .tlr-live-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 1px 6px;
+        border-radius: 999px;
+        border: 1px solid var(--divider-color, var(--border-subtle, rgba(0, 0, 0, 0.12)));
+        background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+        color: var(--text-muted, rgba(0, 0, 0, 0.68));
         font-size: 11px;
+        vertical-align: middle;
+      }
+
+      .tlr-live-badge.is-new {
+        color: var(--text-default, var(--text, inherit));
+      }
+
+      .tlr-live-badge.is-remote {
+        border-style: dashed;
       }
 
       .tlr-seg-bold { font-weight: 600; }

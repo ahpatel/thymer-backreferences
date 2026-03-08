@@ -17,6 +17,7 @@ Built for [Thymer](https://thymer.com/) using the [Thymer Plugin SDK](https://gi
 
 - **Property References**: references to the active note through record-link properties, grouped by property name.
 - **Linked References**: line-level mentions grouped by source note.
+- **Live Activity**: new references added after a page opens are marked in place, and remote edits are called out inline.
 
 ## Options
 
@@ -36,10 +37,17 @@ Built for [Thymer](https://thymer.com/) using the [Thymer Plugin SDK](https://gi
   - Clicking the search icon toggles a text field.
   - Typing filters mentions and highlights matching text.
 
-- **Ignore a linked reference (shared)**
-  - `Alt+Click` a linked reference line to toggle ignore on that source line.
-  - Ignored lines are marked `Ignored` in the list.
-  - Ignore state is written to line-item metadata key `plugin.refs.v1.ignore`, so other plugins can honor it.
+- **Expand linked context**
+  - Each linked mention starts with a compact `Show more context` control.
+  - Clicking it expands the full child subtree for that mention and exposes up/down controls for nearby sibling lines.
+
+- **Compact empty state**
+  - When a page has no references yet, the footer stays minimal until you click `Show sections`.
+
+- **Live activity mode**
+  - The status bar shows the active page's current backreference count.
+  - `New` marks references that appeared since the page was opened.
+  - `Changed` marks references updated remotely after the footer had already loaded.
 
 ## Command
 
@@ -70,4 +78,7 @@ Edit `custom` in `plugin.json`:
 4. Confirm Linked References are grouped by source note.
 5. Toggle search and verify filtering/highlighting.
 6. Change sort field and direction and verify order updates.
-7. Click a source note to navigate; Ctrl/Cmd-click to open in a new panel.
+7. Expand a linked reference and verify descendants load first, then above/below context can be added with the arrow controls.
+8. Make or receive a new reference while the page stays open and verify `New` / `Changed` badges update.
+9. Confirm the status bar count matches the footer.
+10. Click a source note to navigate; Ctrl/Cmd-click to open in a new panel.
