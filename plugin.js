@@ -1,7 +1,7 @@
 class Plugin extends AppPlugin {
   onLoad() {
     // NOTE: Thymer strips top-level code outside the Plugin class.
-    this._version = '0.4.26';
+    this._version = '0.4.27';
     this._pluginName = 'Backreferences';
 
     this._panelStates = new Map();
@@ -4815,6 +4815,7 @@ class Plugin extends AppPlugin {
         entryEl.appendChild(mainRowEl);
 
         if (state && ctx) {
+          if (ctx.showMoreContext === true) mainRowEl.classList.add('is-context-open');
           mainRowEl.appendChild(this.buildLinkedContextControls(line.guid, ctx));
 
           if (ctx.loading === true) {
@@ -5922,16 +5923,32 @@ class Plugin extends AppPlugin {
         display: flex;
         align-items: flex-start;
         gap: 4px;
+        border-radius: var(--radius-normal, 8px);
+        border: 1px solid transparent;
+        background: transparent;
+        transition: background-color 0.15s, border-color 0.15s;
+      }
+
+      .tlr-line-main:hover,
+      .tlr-line-main:focus-within {
+        background: var(--button-normal-hover-color, var(--bg-hover, rgba(0, 0, 0, 0.04)));
+        border-color: var(--divider-color, var(--border-subtle, rgba(0, 0, 0, 0.12)));
+      }
+
+      .tlr-line-main.is-context-open {
+        background: var(--bg-selected, var(--bg-hover, rgba(0, 0, 0, 0.05)));
+        border-color: var(--divider-color, var(--border-subtle, rgba(0, 0, 0, 0.12)));
       }
 
       .tlr-line {
         display: block;
         flex: 1 1 auto;
         min-width: 0;
-        padding: 8px 10px;
+        padding: 8px 10px 8px 12px;
         text-align: left;
         color: var(--text, inherit);
         line-height: 1.35;
+        border-radius: inherit;
       }
 
       .tlr-prefix {
@@ -5949,7 +5966,8 @@ class Plugin extends AppPlugin {
         align-items: center;
         gap: 8px;
         flex: 0 0 auto;
-        padding: 8px 10px 0 0;
+        padding: 6px 8px 6px 0;
+        min-height: 100%;
       }
 
       .tlr-line-actions-group {
@@ -6036,6 +6054,13 @@ class Plugin extends AppPlugin {
         color: var(--text, inherit);
         line-height: 1.35;
         border-left: 1px solid var(--divider-color, var(--border-subtle, rgba(0, 0, 0, 0.12)));
+        border-radius: 6px;
+        transition: background-color 0.15s, border-color 0.15s;
+      }
+
+      .tlr-context-line:hover,
+      .tlr-context-line:focus-visible {
+        background: var(--bg-hover, rgba(0, 0, 0, 0.04));
       }
 
       .tlr-context-note {
