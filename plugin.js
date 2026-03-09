@@ -1,7 +1,7 @@
 class Plugin extends AppPlugin {
   onLoad() {
     // NOTE: Thymer strips top-level code outside the Plugin class.
-    this._version = '0.4.20';
+    this._version = '0.4.21';
     this._pluginName = 'Backreferences';
 
     this._panelStates = new Map();
@@ -461,14 +461,14 @@ class Plugin extends AppPlugin {
     headerControls.className = 'tlr-header-controls';
 
     const toggleBtn = document.createElement('button');
-    toggleBtn.className = 'tlr-btn tlr-toggle button-none button-small button-minimal-hover';
+    toggleBtn.className = 'tlr-btn tlr-toggle tlr-section-toggle button-none button-small button-minimal-hover';
     toggleBtn.type = 'button';
     toggleBtn.dataset.action = 'toggle';
     toggleBtn.title = 'Collapse/expand';
     toggleBtn.textContent = this._collapsed ? '+' : '-';
 
     const title = document.createElement('div');
-    title.className = 'tlr-title';
+    title.className = 'tlr-title tlr-section-title text-details';
     title.textContent = 'Backreferences';
 
     const count = document.createElement('div');
@@ -1874,6 +1874,7 @@ class Plugin extends AppPlugin {
     if (!state) return;
     const open = state.searchOpen === true;
     const active = open || this.hasSearchQuery(state);
+    const hasQuery = this.hasSearchQuery(state);
 
     if (state.rootEl) {
       state.rootEl.classList.toggle('tlr-search-open', open);
@@ -1885,8 +1886,9 @@ class Plugin extends AppPlugin {
     if (state.searchToggleEl) {
       state.searchToggleEl.setAttribute('aria-expanded', open ? 'true' : 'false');
       state.searchToggleEl.classList.toggle('is-active', active);
-      state.searchToggleEl.setAttribute('data-tooltip', open ? 'Hide filter bar' : 'Filter');
-      state.searchToggleEl.title = open ? 'Hide filter bar' : 'Filter';
+      const tooltip = open ? 'Hide filter bar' : hasQuery ? 'Filter (active)' : 'Filter';
+      state.searchToggleEl.setAttribute('data-tooltip', tooltip);
+      state.searchToggleEl.title = tooltip;
       const icon = state.searchToggleEl.querySelector?.('.id--filter-icon') || null;
       icon?.classList?.toggle?.('text-primary-icon', active);
       icon?.classList?.toggle?.('bold', active);
@@ -4256,10 +4258,6 @@ class Plugin extends AppPlugin {
 
     const parts = [];
     if (searchMode === 'query') {
-      if (query) {
-        const shortQuery = query.length > 24 ? `${query.slice(0, 24)}...` : query;
-        parts.push(`Query: "${shortQuery}"`);
-      }
       if (incompleteQueryDraft) {
         parts.push('Continue typing...');
       } else if (queryFilterState?.error) {
@@ -4280,10 +4278,6 @@ class Plugin extends AppPlugin {
         if (showUnlinkedCounts && totalUnlinkedRefCount > 0) parts.push(`${totalUnlinkedRefCount} unlinked refs`);
       }
     } else if (hasScopedView) {
-      if (textQueryLower) {
-        const shortQuery = query.length > 24 ? `${query.slice(0, 24)}...` : query;
-        parts.push(`Search: "${shortQuery}"`);
-      }
       if (totalUniquePages.size > 0) parts.push(`${filteredUniquePages.size}/${totalUniquePages.size} pages`);
       if (totalPropRefCount > 0) parts.push(`${filteredPropRefCount}/${totalPropRefCount} prop refs`);
       if (totalLinkedRefCount > 0) parts.push(`${filteredLinkedRefCount}/${totalLinkedRefCount} line refs`);
@@ -5035,8 +5029,8 @@ class Plugin extends AppPlugin {
       .tlr-header {
         display: flex;
         align-items: center;
-        gap: 12px;
-        min-height: 30px;
+        gap: 8px;
+        min-height: 21px;
         margin-bottom: 0;
       }
 
@@ -5057,7 +5051,7 @@ class Plugin extends AppPlugin {
 
       .tlr-title {
         flex: 0 0 auto;
-        font-weight: 600;
+        min-width: 0;
         white-space: nowrap;
       }
 
@@ -5065,6 +5059,7 @@ class Plugin extends AppPlugin {
         flex: 1 1 auto;
         color: var(--text-muted, rgba(0, 0, 0, 0.6));
         font-size: 12px;
+        line-height: 21px;
         white-space: nowrap;
         font-variant-numeric: tabular-nums;
         overflow: hidden;
@@ -5098,14 +5093,20 @@ class Plugin extends AppPlugin {
         align-items: center;
         justify-content: center;
         min-width: 30px;
+        min-height: 24px;
+        border: 1px solid transparent;
+        border-radius: var(--button-radius, 5px);
+        transition: background-color 0.15s, border-color 0.15s, color 0.15s;
       }
 
       .tlr-filter-toggle.is-active {
-        color: var(--text-default, var(--text, inherit));
+        background: var(--button-minimal-bg-active-color, var(--bg-selected, rgba(0, 0, 0, 0.06)));
+        border-color: var(--button-minimal-hover-color, var(--button-minimal-border-color, transparent));
+        color: var(--button-minimal-fg-color, var(--text-default, var(--text, inherit)));
       }
 
       .tlr-filter-toggle.is-active .id--filter-icon {
-        color: var(--text-hilite, var(--link-color, var(--accent, #39a98c)));
+        color: var(--button-primary-icon-color, currentColor);
         font-weight: 700;
       }
 
@@ -5452,10 +5453,7 @@ class Plugin extends AppPlugin {
       }
 
       .tlr-toggle {
-        width: 26px;
-        padding: 4px 0;
-        text-align: center;
-        font-weight: 700;
+        flex: 0 0 auto;
       }
 
       .tlr-body { display: block; }
