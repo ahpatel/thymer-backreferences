@@ -25,7 +25,8 @@ Built for [Thymer](https://thymer.com/) using the [Thymer Plugin SDK](https://gi
 - **Collapse results**
   - Use the header chevron to collapse or expand the Backreferences section.
   - Each subsection also has its own chevron toggle for hiding Property, Linked, or Unlinked references independently.
-  - Default behavior is open and expanded.
+  - Pages remember footer + section collapse choices individually.
+  - Without a saved page override, the full footer starts collapsed when there are no linked/property references yet, and `Property References` / `Linked References` start collapsed when they have zero matches.
 
 - **Change sort order**
   - `Page Last Edited`: sort by most recently edited source note.
@@ -39,6 +40,7 @@ Built for [Thymer](https://thymer.com/) using the [Thymer Plugin SDK](https://gi
   - The header keeps `Filter` and `Sort` pinned in the top-right.
   - Clicking `Filter` reveals the query bar on its own row below the header.
   - The query bar borrows Thymer's native collection-filter styling and only shows the accent outline while focused.
+  - The input placeholder now shows that you can either type plain text or a Thymer query.
   - Query autocomplete supports collections, built-in keys, users, and collection properties; long property lists stay scrollable in a native-style dropdown.
   - Plain text keeps the lightweight local filter behavior.
   - Query syntax like `@task`, `@Journey`, `"exact phrase"`, and `foo AND bar` uses Thymer's search language, but stays scoped to the current page's backreferences.
@@ -90,22 +92,26 @@ Edit `custom` in `plugin.json`:
 1. Open a note that is referenced elsewhere.
 2. Confirm Backreferences appears at the bottom.
 3. Confirm the top summary stays compact while each section header shows its own ref count.
-4. Confirm Property References are grouped by property with an outside-chevron collapse toggle when applicable.
-5. Confirm property records and linked rows sit visibly nested under their parent property/source headers.
-6. Confirm Linked References are grouped by source note.
-7. Confirm Unlinked References appear separately when the note title is mentioned without a record link.
-8. Confirm linked rows hover/focus as a single row while the context controls remain independently clickable.
-9. Confirm only the Filter and Sort buttons appear in the header's top-right before the filter bar is opened.
-10. Click `Filter` and verify the query bar appears on its own row below the header.
-11. Focus the query bar and verify the accent outline appears only while focused.
-12. Type `@Sources`, accept the collection autocomplete, and verify the query remains `@Sources` rather than `@@Sources`.
-13. Type `@Sources.` and verify all properties are available in a scrollable autocomplete list.
-14. Type plain text and verify the footer filters/highlights matching titles and lines.
-15. Type query syntax such as `@task`, `@Journey`, and `foo AND bar` and verify only matching backreferences remain.
-16. Expand `Unlinked References`, repeat a query, and verify that section joins the scoped results.
-17. Change sort field and direction and verify order updates.
-18. Collapse and re-expand a linked group and an unlinked group and verify the per-page toggle only hides that group's rows.
-19. Expand a linked or unlinked reference and verify descendants load first, then above/below context can be added with the arrow controls.
-20. Make or receive a new reference while the page stays open and verify `New` / `Changed` badges update.
-21. Confirm the status bar count matches the footer.
-22. Click a source note to navigate; Ctrl/Cmd-click to open in a new panel.
+4. Open a note with no linked/property refs and confirm the full footer starts collapsed by default.
+5. Open notes with zero property refs or zero linked refs and confirm those empty sections start collapsed by default.
+6. Change the footer or section collapse state for one note, navigate away, return, and confirm that page-specific choice persists.
+7. Confirm Property References are grouped by property with an outside-chevron collapse toggle when applicable.
+8. Confirm property records and linked rows sit visibly nested under their parent property/source headers.
+9. Confirm Linked References are grouped by source note.
+10. Confirm Unlinked References appear separately when the note title is mentioned without a record link.
+11. Confirm linked rows hover/focus as a single row while the context controls remain independently clickable.
+12. Confirm only the Filter and Sort buttons appear in the header's top-right before the filter bar is opened.
+13. Click `Filter` and verify the query bar appears on its own row below the header.
+14. Confirm the query bar copy makes it clear that plain text and Thymer query syntax are both supported.
+15. Focus the query bar and verify the accent outline appears only while focused.
+16. Type `@Sources`, accept the collection autocomplete, and verify the query remains `@Sources` rather than `@@Sources`.
+17. Type `@Sources.` and verify all properties are available in a scrollable autocomplete list.
+18. Type plain text and verify the footer filters/highlights matching titles and lines.
+19. Type query syntax such as `@task`, `@Journey`, and `foo AND bar` and verify only matching backreferences remain.
+20. Expand `Unlinked References`, repeat a query, and verify that section joins the scoped results.
+21. Change sort field and direction and verify order updates.
+22. Collapse and re-expand a linked group and an unlinked group and verify the per-page toggle only hides that group's rows.
+23. Expand a linked or unlinked reference and verify descendants load first, then above/below context can be added with the arrow controls.
+24. Make or receive a new reference while the page stays open and verify `New` / `Changed` badges update.
+25. Confirm the status bar count matches the footer.
+26. Click a source note to navigate; Ctrl/Cmd-click to open in a new panel.

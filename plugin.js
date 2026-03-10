@@ -1,15 +1,14 @@
 class Plugin extends AppPlugin {
   onLoad() {
     // NOTE: Thymer strips top-level code outside the Plugin class.
-    this._version = '0.4.28';
+    this._version = '0.4.29';
     this._pluginName = 'Backreferences';
 
     this._panelStates = new Map();
     this._eventHandlerIds = [];
 
-    this._storageKeyCollapsed = 'thymer_backreferences_collapsed_v2';
-    this._legacyStorageKeyCollapsed = null;
-    this._collapsed = this.loadCollapsedSetting();
+    this._storageKeyPageViewByRecord = 'thymer_backreferences_page_view_by_record_v1';
+    this._pageViewByRecord = this.loadPageViewByRecordSetting();
 
     this._storageKeyPropGroupCollapsed = 'thymer_backreferences_prop_group_collapsed_v2';
     this._legacyStorageKeyPropGroupCollapsed = null;
@@ -165,13 +164,21 @@ class Plugin extends AppPlugin {
     if (!state.sectionCollapsed || typeof state.sectionCollapsed !== 'object') {
       state.sectionCollapsed = this.createDefaultSectionCollapsedState();
     }
+    if (state.footerCollapsed !== true && state.footerCollapsed !== false) {
+      state.footerCollapsed = null;
+    }
     const recordChanged = state.recordGuid !== recordGuid;
     state.recordGuid = recordGuid;
     state.filterPreset = this.normalizeFilterPreset(state.filterPreset) || this._defaultFilterPreset;
 
+    if (recordChanged) {
+      const viewPrefs = this.getPageViewPreference(recordGuid);
+      state.footerCollapsed = viewPrefs.footerCollapsed;
+      state.sectionCollapsed = this.cloneSectionCollapsedState(viewPrefs.sections);
+      state.emptyStateExpanded = viewPrefs.emptyExpanded === true;
+    }
+
     if (recordChanged || !this.isValidSortBy(state.sortBy) || !this.isValidSortDir(state.sortDir)) {
-      state.sectionCollapsed = this.createDefaultSectionCollapsedState();
-      state.emptyStateExpanded = false;
       state.linkedContextByLine = new Map();
       state.filterMetaLoading = false;
       state.filterMenuOpen = false;
@@ -235,6 +242,7 @@ class Plugin extends AppPlugin {
         rootEl: null,
         bodyEl: null,
         countEl: null,
+        footerToggleEl: null,
         filterToggleEl: null,
         filterMenuEl: null,
         sortToggleEl: null,
@@ -258,6 +266,7 @@ class Plugin extends AppPlugin {
         filterMenuOpen: false,
         filterMenuDismissHandler: null,
         filterMetaLoading: false,
+        footerCollapsed: null,
         sectionCollapsed: this.createDefaultSectionCollapsedState(),
         emptyStateExpanded: false,
         linkedContextByLine: new Map(),
@@ -296,6 +305,7 @@ class Plugin extends AppPlugin {
       rootEl: null,
       bodyEl: null,
       countEl: null,
+      footerToggleEl: null,
       filterToggleEl: null,
       filterMenuEl: null,
       sortToggleEl: null,
@@ -319,6 +329,7 @@ class Plugin extends AppPlugin {
       filterMenuOpen: false,
       filterMenuDismissHandler: null,
       filterMetaLoading: false,
+      footerCollapsed: null,
       sectionCollapsed: this.createDefaultSectionCollapsedState(),
       emptyStateExpanded: false,
       linkedContextByLine: new Map(),
@@ -469,9 +480,9 @@ class Plugin extends AppPlugin {
     toggleBtn.type = 'button';
     toggleBtn.dataset.action = 'toggle';
     toggleBtn.title = 'Collapse/expand';
-    toggleBtn.setAttribute('aria-label', this._collapsed ? 'Expand' : 'Collapse');
-    toggleBtn.setAttribute('aria-expanded', this._collapsed ? 'false' : 'true');
-    toggleBtn.appendChild(this.buildChevronIcon(this._collapsed, 'tlr-toggle-caret'));
+    toggleBtn.setAttribute('aria-label', 'Collapse');
+    toggleBtn.setAttribute('aria-expanded', 'true');
+    toggleBtn.appendChild(this.buildChevronIcon(false, 'tlr-toggle-caret'));
 
     const title = document.createElement('div');
     title.className = 'tlr-title tlr-section-title text-details';
@@ -520,8 +531,8 @@ class Plugin extends AppPlugin {
     input.className = 'tlr-search-input query-input--field w-full form-input is-collection-filter';
     input.type = 'text';
     input.name = 'backreferences-filter';
-    input.placeholder = '@Collection.property = "value" AND title';
-    input.title = 'Filter backreferences with plain text or Thymer query syntax';
+    input.placeholder = 'Search text, or use @Collection.property = "value"';
+    input.title = 'Search current backreferences with plain text, or use Thymer query syntax like @Collection.property = "value" and AND/OR/NOT';
     input.autocomplete = 'off';
     input.spellcheck = false;
     input.value = state.searchQuery || '';
@@ -617,7 +628,7 @@ class Plugin extends AppPlugin {
     clearBtn.className = 'tlr-search-clear query-input--clear-btn button-none button-small button-minimal-hover tooltip';
     clearBtn.type = 'button';
     clearBtn.dataset.action = 'clear-search';
-    clearBtn.setAttribute('data-tooltip', 'Clear query');
+    clearBtn.setAttribute('data-tooltip', 'Clear search');
     clearBtn.setAttribute('data-tooltip-dir', 'top');
     try {
       clearBtn.appendChild(this.ui.createIcon('ti-x'));
@@ -697,7 +708,9 @@ class Plugin extends AppPlugin {
 
     root.addEventListener('click', (e) => this.handleFooterClick(e));
 
-    this.applyCollapsedState(root, this._collapsed);
+    state.rootEl = root;
+    state.footerToggleEl = toggleBtn;
+    this.syncFooterCollapsedState(state, this.isFooterCollapsed(state, this.getCollapseMetrics(state.lastResults)));
     root.classList.toggle('tlr-sort-open', state.sortMenuOpen === true);
 
     state.filterToggleEl = null;
@@ -731,19 +744,9 @@ class Plugin extends AppPlugin {
     const state = this._panelStates.get(panelId) || null;
 
     if (action === 'toggle') {
-      this._collapsed = !this._collapsed;
-      this.saveCollapsedSetting(this._collapsed);
-      for (const s of this._panelStates.values()) {
-        if (!s?.rootEl) continue;
-        this.applyCollapsedState(s.rootEl, this._collapsed);
-        const btn = s.rootEl.querySelector?.('[data-action="toggle"]') || null;
-        if (btn) {
-          btn.title = this._collapsed ? 'Expand' : 'Collapse';
-          btn.setAttribute('aria-label', this._collapsed ? 'Expand' : 'Collapse');
-          btn.setAttribute('aria-expanded', this._collapsed ? 'false' : 'true');
-          this.syncChevronIcon(btn.querySelector?.('.tlr-toggle-caret') || null, this._collapsed);
-        }
-      }
+      if (!state) return;
+      const nextCollapsed = !this.isFooterCollapsed(state, this.getCollapseMetrics(state.lastResults));
+      this.applyFooterCollapsedPreferenceForRecord(state.recordGuid, nextCollapsed);
       return;
     }
 
@@ -792,19 +795,8 @@ class Plugin extends AppPlugin {
       const sectionId = this.normalizeSectionId(actionEl.dataset.sectionId);
       if (!sectionId) return;
 
-      const nextCollapsed = !this.isSectionCollapsed(state, sectionId);
-      this.setSectionCollapsed(state, sectionId, nextCollapsed);
-      this.renderFromCache(state);
-
-      if (sectionId === 'unlinked' && nextCollapsed !== true) {
-        this.ensureDeferredUnlinkedLoaded(state).catch(() => {
-          // ignore
-        });
-      }
-      if (sectionId === 'unlinked') {
-        this.syncScopedQueryWithCurrentInput(state, { immediate: true, reason: 'toggle-unlinked-section' });
-        this.renderFromCache(state);
-      }
+      const nextCollapsed = !this.isSectionCollapsed(state, sectionId, this.getCollapseMetrics(state.lastResults));
+      this.applySectionCollapsedPreferenceForRecord(state.recordGuid, sectionId, nextCollapsed);
       return;
     }
 
@@ -864,8 +856,7 @@ class Plugin extends AppPlugin {
 
     if (action === 'expand-empty') {
       if (!state) return;
-      state.emptyStateExpanded = true;
-      this.renderFromCache(state);
+      this.applyEmptyStateExpandedPreferenceForRecord(state.recordGuid, true);
       return;
     }
 
@@ -957,11 +948,74 @@ class Plugin extends AppPlugin {
   }
 
   createDefaultSectionCollapsedState() {
+    return {};
+  }
+
+  cloneSectionCollapsedState(sectionCollapsed) {
+    const out = {};
+    for (const id of ['property', 'linked', 'unlinked']) {
+      if (typeof sectionCollapsed?.[id] === 'boolean') out[id] = sectionCollapsed[id];
+    }
+    return out;
+  }
+
+  getCollapseMetrics(results) {
+    if (!results || typeof results !== 'object') {
+      return {
+        ready: false,
+        propertyCount: 0,
+        linkedCount: 0,
+        unlinkedCount: 0,
+        propertyError: false,
+        linkedError: false,
+        unlinkedError: false,
+        unlinkedDeferred: false
+      };
+    }
+
+    const propertyGroups = Array.isArray(results.propertyGroups) ? results.propertyGroups : [];
+    const linkedGroups = Array.isArray(results.linkedGroups) ? results.linkedGroups : [];
+    const unlinkedGroups = Array.isArray(results.unlinkedGroups) ? results.unlinkedGroups : [];
+
     return {
-      property: false,
-      linked: false,
-      unlinked: true
+      ready: true,
+      propertyCount: propertyGroups.reduce((n, group) => n + (group?.records?.length || 0), 0),
+      linkedCount: this.countLinkedReferences(linkedGroups),
+      unlinkedCount: this.countLinkedReferences(unlinkedGroups),
+      propertyError: Boolean(results.propertyError),
+      linkedError: Boolean(results.linkedError),
+      unlinkedError: Boolean(results.unlinkedError),
+      unlinkedDeferred: results.unlinkedDeferred === true
     };
+  }
+
+  getDefaultFooterCollapsed(metrics) {
+    if (!metrics?.ready) return false;
+    if (metrics.propertyError || metrics.linkedError) return false;
+    if ((metrics.propertyCount + metrics.linkedCount) > 0) return false;
+    if (metrics.unlinkedDeferred === true) return true;
+    if (metrics.unlinkedError) return false;
+    return metrics.unlinkedCount === 0;
+  }
+
+  isFooterCollapsed(state, metrics) {
+    if (state?.footerCollapsed === true || state?.footerCollapsed === false) {
+      return state.footerCollapsed;
+    }
+    return this.getDefaultFooterCollapsed(metrics);
+  }
+
+  syncFooterCollapsedState(state, collapsed) {
+    if (!state?.rootEl) return;
+    const nextCollapsed = collapsed === true;
+    this.applyCollapsedState(state.rootEl, nextCollapsed);
+
+    const btn = state.footerToggleEl || state.rootEl.querySelector?.('[data-action="toggle"]') || null;
+    if (!btn) return;
+    btn.title = nextCollapsed ? 'Expand' : 'Collapse';
+    btn.setAttribute('aria-label', nextCollapsed ? 'Expand' : 'Collapse');
+    btn.setAttribute('aria-expanded', nextCollapsed ? 'false' : 'true');
+    this.syncChevronIcon(btn.querySelector?.('.tlr-toggle-caret') || null, nextCollapsed);
   }
 
   normalizeSectionId(sectionId) {
@@ -970,17 +1024,22 @@ class Plugin extends AppPlugin {
       : null;
   }
 
-  getDefaultSectionCollapsed(sectionId) {
-    const defaults = this.createDefaultSectionCollapsedState();
-    return defaults[sectionId] === true;
+  getDefaultSectionCollapsed(sectionId, metrics) {
+    const id = this.normalizeSectionId(sectionId);
+    if (!id) return false;
+    if (id === 'unlinked') return true;
+    if (!metrics?.ready) return false;
+    if (id === 'property') return metrics.propertyError ? false : metrics.propertyCount === 0;
+    if (id === 'linked') return metrics.linkedError ? false : metrics.linkedCount === 0;
+    return false;
   }
 
-  isSectionCollapsed(state, sectionId) {
+  isSectionCollapsed(state, sectionId, metrics) {
     const id = this.normalizeSectionId(sectionId);
     if (!id) return false;
     const current = state?.sectionCollapsed?.[id];
     if (typeof current === 'boolean') return current;
-    return this.getDefaultSectionCollapsed(id);
+    return this.getDefaultSectionCollapsed(id, metrics);
   }
 
   setSectionCollapsed(state, sectionId, collapsed) {
@@ -2280,41 +2339,124 @@ class Plugin extends AppPlugin {
     this.renderReferences(state, cached);
   }
 
-  loadCollapsedSetting() {
-    try {
-      const v = localStorage.getItem(this._storageKeyCollapsed);
-      if (v === '1') return true;
-      if (v === '0') return false;
-    } catch (e) {
-      // ignore
-    }
-
-    // Migration: older versions used a back"links" storage key.
-    try {
-      const legacyKey = this._legacyStorageKeyCollapsed;
-      if (legacyKey && legacyKey !== this._storageKeyCollapsed) {
-        const v = localStorage.getItem(legacyKey);
-        if (v === '1' || v === '0') {
-          try {
-            localStorage.setItem(this._storageKeyCollapsed, v);
-          } catch (e) {
-            // ignore
-          }
-          return v === '1';
-        }
-      }
-    } catch (e) {
-      // ignore
-    }
-
-    return false;
+  normalizePageViewPreference(pref) {
+    const sections = this.cloneSectionCollapsedState(pref?.sections);
+    const footerCollapsed = typeof pref?.footerCollapsed === 'boolean' ? pref.footerCollapsed : null;
+    const emptyExpanded = pref?.emptyExpanded === true;
+    return { footerCollapsed, sections, emptyExpanded };
   }
 
-  saveCollapsedSetting(collapsed) {
+  loadPageViewByRecordSetting() {
     try {
-      localStorage.setItem(this._storageKeyCollapsed, collapsed ? '1' : '0');
+      const raw = localStorage.getItem(this._storageKeyPageViewByRecord);
+      if (typeof raw !== 'string' || !raw.trim()) return {};
+
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+
+      const out = {};
+      for (const [recordGuid, pref] of Object.entries(parsed)) {
+        const guid = typeof recordGuid === 'string' ? recordGuid.trim() : '';
+        if (!guid) continue;
+        out[guid] = this.normalizePageViewPreference(pref);
+      }
+      return out;
     } catch (e) {
       // ignore
+    }
+    return {};
+  }
+
+  savePageViewByRecordSetting() {
+    try {
+      localStorage.setItem(this._storageKeyPageViewByRecord, JSON.stringify(this._pageViewByRecord || {}));
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  getPageViewPreference(recordGuid) {
+    const guid = (recordGuid || '').trim();
+    if (!guid) return this.normalizePageViewPreference(null);
+    return this.normalizePageViewPreference(this._pageViewByRecord?.[guid] || null);
+  }
+
+  ensurePageViewPreference(recordGuid) {
+    const guid = (recordGuid || '').trim();
+    if (!guid) return null;
+    if (!this._pageViewByRecord || typeof this._pageViewByRecord !== 'object') {
+      this._pageViewByRecord = {};
+    }
+    const nextPref = this.normalizePageViewPreference(this._pageViewByRecord[guid] || null);
+    this._pageViewByRecord[guid] = nextPref;
+    return nextPref;
+  }
+
+  setFooterCollapsedPreferenceForRecord(recordGuid, collapsed) {
+    const pref = this.ensurePageViewPreference(recordGuid);
+    if (!pref) return;
+    pref.footerCollapsed = collapsed === true;
+    this.savePageViewByRecordSetting();
+  }
+
+  setSectionCollapsedPreferenceForRecord(recordGuid, sectionId, collapsed) {
+    const id = this.normalizeSectionId(sectionId);
+    if (!id) return;
+    const pref = this.ensurePageViewPreference(recordGuid);
+    if (!pref) return;
+    pref.sections = this.cloneSectionCollapsedState(pref.sections);
+    pref.sections[id] = collapsed === true;
+    this.savePageViewByRecordSetting();
+  }
+
+  setEmptyStateExpandedPreferenceForRecord(recordGuid, expanded) {
+    const pref = this.ensurePageViewPreference(recordGuid);
+    if (!pref) return;
+    pref.emptyExpanded = expanded === true;
+    this.savePageViewByRecordSetting();
+  }
+
+  applyFooterCollapsedPreferenceForRecord(recordGuid, collapsed) {
+    const guid = (recordGuid || '').trim();
+    if (!guid) return;
+    this.setFooterCollapsedPreferenceForRecord(guid, collapsed);
+
+    for (const state of this._panelStates.values()) {
+      if (!state || state.recordGuid !== guid) continue;
+      state.footerCollapsed = collapsed === true;
+      this.syncFooterCollapsedState(state, this.isFooterCollapsed(state, this.getCollapseMetrics(state.lastResults)));
+    }
+  }
+
+  applySectionCollapsedPreferenceForRecord(recordGuid, sectionId, collapsed) {
+    const guid = (recordGuid || '').trim();
+    const id = this.normalizeSectionId(sectionId);
+    if (!guid || !id) return;
+    this.setSectionCollapsedPreferenceForRecord(guid, id, collapsed);
+
+    for (const state of this._panelStates.values()) {
+      if (!state || state.recordGuid !== guid) continue;
+      state.sectionCollapsed = this.cloneSectionCollapsedState(state.sectionCollapsed);
+      state.sectionCollapsed[id] = collapsed === true;
+      this.syncScopedQueryWithCurrentInput(state, { immediate: true, reason: 'section-preference-changed' });
+      this.renderFromCache(state);
+      if (id === 'unlinked' && collapsed !== true && state.lastResults?.unlinkedDeferred === true) {
+        this.ensureDeferredUnlinkedLoaded(state).catch(() => {
+          // ignore
+        });
+      }
+    }
+  }
+
+  applyEmptyStateExpandedPreferenceForRecord(recordGuid, expanded) {
+    const guid = (recordGuid || '').trim();
+    if (!guid) return;
+    this.setEmptyStateExpandedPreferenceForRecord(guid, expanded);
+
+    for (const state of this._panelStates.values()) {
+      if (!state || state.recordGuid !== guid) continue;
+      state.emptyStateExpanded = expanded === true;
+      this.renderFromCache(state);
     }
   }
 
@@ -4272,6 +4414,16 @@ class Plugin extends AppPlugin {
     const totalPropRefCount = propsAll.reduce((n, g) => n + (g?.records?.length || 0), 0);
     const totalLinkedRefCount = this.countLinkedReferences(linkedAll);
     const totalUnlinkedRefCount = this.countLinkedReferences(unlinkedAll);
+    const collapseMetrics = {
+      ready: true,
+      propertyCount: totalPropRefCount,
+      linkedCount: totalLinkedRefCount,
+      unlinkedCount: totalUnlinkedRefCount,
+      propertyError: Boolean(propertyError),
+      linkedError: Boolean(linkedError),
+      unlinkedError: Boolean(unlinkedError),
+      unlinkedDeferred: unlinkedDeferred === true
+    };
     const hasAnyErrors = Boolean(propertyError || linkedError || unlinkedError);
     const isEmptyWithoutFilter = !hasAnyErrors
       && totalPropRefCount === 0
@@ -4281,6 +4433,8 @@ class Plugin extends AppPlugin {
       && searchMode === 'none'
       && state.emptyStateExpanded !== true
       && unlinkedDeferred !== true;
+
+    this.syncFooterCollapsedState(state, this.isFooterCollapsed(state, collapseMetrics));
 
     if (useCompactEmpty) {
       state.rootEl?.classList?.add('tlr-empty-compact');
@@ -4369,6 +4523,9 @@ class Plugin extends AppPlugin {
     const showScopedCounts = hasScopedView || (searchMode === 'query' && canApplyScopedQuery);
     const totalVisibleRefCount = totalPropRefCount + totalLinkedRefCount + (showUnlinkedCounts ? totalUnlinkedRefCount : 0);
     const filteredVisibleRefCount = filteredPropRefCount + filteredLinkedRefCount + (showUnlinkedCounts ? filteredUnlinkedRefCount : 0);
+    const propertySectionCollapsed = this.isSectionCollapsed(state, 'property', collapseMetrics);
+    const linkedSectionCollapsed = this.isSectionCollapsed(state, 'linked', collapseMetrics);
+    const unlinkedSectionCollapsed = this.isSectionCollapsed(state, 'unlinked', collapseMetrics);
 
     const filteredUniquePages = new Set();
     for (const g of props) {
@@ -4452,6 +4609,7 @@ class Plugin extends AppPlugin {
     const propertySection = this.appendCollapsibleSection(body, state, {
       sectionId: 'property',
       title: 'Property References',
+      collapsed: propertySectionCollapsed,
       meta: this.formatCountLabel(showScopedCounts ? filteredPropRefCount : totalPropRefCount, 'ref', {
         totalCount: showScopedCounts ? totalPropRefCount : null,
         scoped: showScopedCounts,
@@ -4472,6 +4630,7 @@ class Plugin extends AppPlugin {
     const linkedSection = this.appendCollapsibleSection(body, state, {
       sectionId: 'linked',
       title: 'Linked References',
+      collapsed: linkedSectionCollapsed,
       meta: this.formatCountLabel(showScopedCounts ? filteredLinkedRefCount : totalLinkedRefCount, 'ref', {
         totalCount: showScopedCounts ? totalLinkedRefCount : null,
         scoped: showScopedCounts,
@@ -4498,6 +4657,7 @@ class Plugin extends AppPlugin {
     const unlinkedSection = this.appendCollapsibleSection(body, state, {
       sectionId: 'unlinked',
       title: 'Unlinked References',
+      collapsed: unlinkedSectionCollapsed,
       meta: this.formatCountLabel(
         showScopedCounts && showUnlinkedCounts ? filteredUnlinkedRefCount : totalUnlinkedRefCount,
         'ref',
@@ -4520,7 +4680,7 @@ class Plugin extends AppPlugin {
     }
 
     if (unlinkedDeferred) {
-      if (!this.isSectionCollapsed(state, 'unlinked')) {
+      if (!unlinkedSectionCollapsed) {
         this.appendNote(unlinkedSection.bodyEl, 'Loading unlinked references...');
       }
       return;
@@ -4551,15 +4711,15 @@ class Plugin extends AppPlugin {
     iconEl.classList.add(collapsed === true ? 'ti-chevron-right' : 'ti-chevron-down');
   }
 
-  appendCollapsibleSection(container, state, { sectionId, title, meta }) {
+  appendCollapsibleSection(container, state, { sectionId, title, meta, collapsed }) {
     if (!container) return;
 
     const id = this.normalizeSectionId(sectionId) || 'property';
-    const collapsed = this.isSectionCollapsed(state, id);
+    const sectionCollapsed = collapsed === true;
 
     const sectionEl = document.createElement('div');
     sectionEl.className = 'tlr-section';
-    if (collapsed) sectionEl.classList.add('tlr-section-collapsed');
+    if (sectionCollapsed) sectionEl.classList.add('tlr-section-collapsed');
 
     const headerEl = document.createElement('div');
     headerEl.className = 'tlr-section-header';
@@ -4570,9 +4730,9 @@ class Plugin extends AppPlugin {
     toggleBtn.dataset.action = 'toggle-section';
     toggleBtn.dataset.sectionId = id;
     toggleBtn.title = 'Collapse/expand';
-    toggleBtn.setAttribute('aria-label', collapsed ? 'Expand section' : 'Collapse section');
-    toggleBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-    toggleBtn.appendChild(this.buildChevronIcon(collapsed, 'tlr-section-caret'));
+    toggleBtn.setAttribute('aria-label', sectionCollapsed ? 'Expand section' : 'Collapse section');
+    toggleBtn.setAttribute('aria-expanded', sectionCollapsed ? 'false' : 'true');
+    toggleBtn.appendChild(this.buildChevronIcon(sectionCollapsed, 'tlr-section-caret'));
 
     const titleEl = document.createElement('div');
     titleEl.className = 'tlr-section-title text-details';
