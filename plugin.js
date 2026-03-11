@@ -1,7 +1,7 @@
 class Plugin extends AppPlugin {
   onLoad() {
     // NOTE: Thymer strips top-level code outside the Plugin class.
-    this._version = '0.4.34';
+    this._version = '0.4.36';
     this._pluginName = 'Backreferences';
 
     this._panelStates = new Map();
@@ -960,6 +960,120 @@ class Plugin extends AppPlugin {
     });
   }
 
+  waitForPanelRecord(panel, recordGuid, timeoutMs = 1800) {
+    return new Promise((resolve) => {
+      const startedAt = Date.now();
+
+      const check = () => {
+        const activeRecordGuid = panel?.getActiveRecord?.()?.guid || null;
+        if (activeRecordGuid && (!recordGuid || activeRecordGuid === recordGuid)) {
+          resolve(true);
+          return;
+        }
+
+        if ((Date.now() - startedAt) >= timeoutMs) {
+          resolve(false);
+          return;
+        }
+
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(check);
+          return;
+        }
+
+        setTimeout(check, 16);
+      };
+
+      check();
+    });
+  }
+
+  getLineElementInPanel(panel, lineGuid) {
+    const panelEl = panel?.getElement?.() || null;
+    if (!panelEl || !lineGuid) return null;
+
+    const lineSelector = `[data-guid="${lineGuid}"]`;
+    if (panelEl.matches?.(lineSelector)) return panelEl;
+
+    return (
+      panelEl.querySelector?.(lineSelector) ||
+      panelEl.querySelector?.(`[dbg-guid="${lineGuid}"]`) ||
+      null
+    );
+  }
+
+  isLineElementVisibleInPanel(panel, lineEl) {
+    const panelEl = panel?.getElement?.() || null;
+    if (!panelEl || !lineEl?.getBoundingClientRect) return false;
+
+    const lineRect = lineEl.getBoundingClientRect();
+    const panelRect = panelEl.getBoundingClientRect();
+    const padding = 20;
+
+    return lineRect.bottom > (panelRect.top + padding) && lineRect.top < (panelRect.bottom - padding);
+  }
+
+  waitForLineElementInPanel(panel, lineGuid, timeoutMs = 1800) {
+    return new Promise((resolve) => {
+      const startedAt = Date.now();
+
+      const check = () => {
+        const lineEl = this.getLineElementInPanel(panel, lineGuid);
+        if (lineEl) {
+          resolve(lineEl);
+          return;
+        }
+
+        if ((Date.now() - startedAt) >= timeoutMs) {
+          resolve(null);
+          return;
+        }
+
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(check);
+          return;
+        }
+
+        setTimeout(check, 16);
+      };
+
+      check();
+    });
+  }
+
+  async assistLineNavigationInPanel(panel, lineGuid, { emphasize = false } = {}) {
+    if (!lineGuid) return false;
+
+    const lineEl = await this.waitForLineElementInPanel(panel, lineGuid);
+    if (!lineEl) return false;
+
+    const targetEl = lineEl.querySelector?.('.line-div') || lineEl;
+    const highlightEls = lineEl === targetEl ? [lineEl] : [lineEl, targetEl];
+
+    if (!this.isLineElementVisibleInPanel(panel, lineEl)) {
+      try {
+        lineEl.scrollIntoView({ block: 'center', inline: 'nearest' });
+      } catch (_err) {
+        // ignore
+      }
+      await this.waitForPanelNavigationFrame();
+    }
+
+    if (emphasize) {
+      highlightEls.forEach((el) => el.classList.add('tlr-line-jump-highlight'));
+      try {
+        this.ui.bounce?.(targetEl);
+      } catch (_err) {
+        // ignore
+      }
+      setTimeout(() => {
+        highlightEls.forEach((el) => el.classList.remove('tlr-line-jump-highlight'));
+      }, 1600);
+    }
+
+    return true;
+  }
+
   async openRecord(panel, recordGuid, lineGuid, e) {
     const workspaceGuid = this.getWorkspaceGuid?.() || null;
     if (!workspaceGuid) return;
@@ -972,7 +1086,15 @@ class Plugin extends AppPlugin {
         if (!newPanel) return;
         this.ui.setActivePanel(newPanel);
         await this.waitForPanelNavigationFrame();
-        await this.navigatePanelToRecord(newPanel, recordGuid, lineGuid || null, workspaceGuid);
+        await this.navigatePanelToRecord(newPanel, recordGuid, null, workspaceGuid);
+        await this.waitForPanelRecord(newPanel, recordGuid);
+
+        if (lineGuid) {
+          await this.navigatePanelToRecord(newPanel, recordGuid, lineGuid, workspaceGuid);
+          await this.waitForPanelNavigationFrame();
+          await this.waitForPanelNavigationFrame();
+          await this.assistLineNavigationInPanel(newPanel, lineGuid, { emphasize: true });
+        }
       } catch (_err) {
         // ignore
       }
@@ -5696,6 +5818,22 @@ class Plugin extends AppPlugin {
       .tlr-sort-menu-divider {
         margin: 10px 0;
         border-top: 1px solid var(--cmdpal-border-color, var(--border-subtle, rgba(0, 0, 0, 0.12)));
+      }
+
+      .tlr-line-jump-highlight {
+        border-radius: 6px;
+        animation: tlr-line-jump-highlight 1.4s ease-out;
+      }
+
+      @keyframes tlr-line-jump-highlight {
+        0% {
+          background: var(--bg-selected, rgba(250, 204, 21, 0.28));
+          box-shadow: inset 0 0 0 1px var(--input-border-color, var(--divider-color, rgba(0, 0, 0, 0.18)));
+        }
+        100% {
+          background: transparent;
+          box-shadow: none;
+        }
       }
 
       .tlr-sort-dir-row {
