@@ -270,6 +270,118 @@ test('query-mode helpers distinguish plain text from Thymer query drafts', () =>
   assert.equal(plugin.isIncompleteQueryDraft('@modified_at > "2026-03-01"'), false);
 });
 
+test('scoped query helpers preserve matching property and line groups', () => {
+  const plugin = makePlugin();
+  const alpha = makeRecord({ guid: 'record-alpha', name: 'Alpha' });
+  const beta = makeRecord({ guid: 'record-beta', name: 'Beta' });
+  const propertyGroups = [{ propertyName: 'Journey', records: [alpha, beta] }];
+  const linkedGroups = [{
+    record: beta,
+    lines: [
+      makeLine({ guid: 'line-1', record: beta, segments: [{ type: 'text', text: 'one' }] }),
+      makeLine({ guid: 'line-2', record: beta, segments: [{ type: 'text', text: 'two' }] })
+    ]
+  }];
+
+  const propertyState = plugin.createQueryFilterState('@Journey.Status = "Active"', {
+    ready: true,
+    matchedRecordGuids: new Set([beta.guid])
+  });
+  const lineState = plugin.createQueryFilterState('@Journey.Status = "Active"', {
+    ready: true,
+    matchedLineGuids: new Set(['line-2'])
+  });
+
+  const filteredProps = plugin.filterPropertyGroupsByScopedQuery(propertyGroups, propertyState);
+  const filteredLines = plugin.filterLineGroupsByScopedQuery(linkedGroups, lineState);
+
+  assert.deepEqual(filteredProps[0].records.map((record) => record.guid), ['record-beta']);
+  assert.deepEqual(filteredLines[0].lines.map((line) => line.guid), ['line-2']);
+});
+
+test('summary counts ignore unlinked refs and footer defaults ignore unlinked-only matches', () => {
+  const plugin = makePlugin();
+  const linkedRecord = makeRecord({ guid: 'linked-record', name: 'Linked Record' });
+  const unlinkedRecord = makeRecord({ guid: 'unlinked-record', name: 'Unlinked Record' });
+  const linkedGroups = [{
+    record: linkedRecord,
+    lines: [makeLine({ guid: 'linked-line', record: linkedRecord, segments: [{ type: 'text', text: 'linked' }] })]
+  }];
+  const unlinkedGroups = [{
+    record: unlinkedRecord,
+    lines: [
+      makeLine({ guid: 'unlinked-line-1', record: unlinkedRecord, segments: [{ type: 'text', text: 'one' }] }),
+      makeLine({ guid: 'unlinked-line-2', record: unlinkedRecord, segments: [{ type: 'text', text: 'two' }] })
+    ]
+  }];
+  const state = {
+    searchQuery: '',
+    emptyStateExpanded: false,
+    sortBy: 'page_last_edited',
+    sortDir: 'desc',
+    sectionCollapsed: {},
+    lastResults: null
+  };
+
+  const primaryView = plugin.buildReferenceViewState(state, {
+    propertyGroups: [],
+    propertyError: '',
+    linkedGroups,
+    linkedError: '',
+    unlinkedGroups,
+    unlinkedError: '',
+    unlinkedDeferred: false,
+    unlinkedLoading: false,
+    maxResults: 200
+  });
+  const unlinkedOnlyView = plugin.buildReferenceViewState(state, {
+    propertyGroups: [],
+    propertyError: '',
+    linkedGroups: [],
+    linkedError: '',
+    unlinkedGroups,
+    unlinkedError: '',
+    unlinkedDeferred: false,
+    unlinkedLoading: false,
+    maxResults: 200
+  });
+
+  assert.equal(primaryView.totalVisibleRefCount, 1);
+  assert.equal(primaryView.summaryText.includes('1 ref'), true);
+  assert.equal(primaryView.summaryText.includes('3 ref'), false);
+  assert.equal(unlinkedOnlyView.totalVisibleRefCount, 0);
+  assert.equal(plugin.getDefaultFooterCollapsed(unlinkedOnlyView.collapseMetrics), true);
+  assert.equal(plugin.buildUnknownReferenceSectionMeta(), '- refs');
+});
+
+test('page view preferences round-trip footer and section state through storage helpers', () => {
+  const plugin = makePlugin();
+  const previousLocalStorage = global.localStorage;
+  const store = new Map();
+  global.localStorage = {
+    getItem(key) {
+      return store.has(key) ? store.get(key) : null;
+    },
+    setItem(key, value) {
+      store.set(key, value);
+    }
+  };
+
+  try {
+    plugin._storageKeyPageViewByRecord = 'test-page-view';
+    plugin._pageViewByRecord = {};
+    plugin.setFooterCollapsedPreferenceForRecord('record-1', true);
+    plugin.setSectionCollapsedPreferenceForRecord('record-1', 'linked', true);
+    plugin._pageViewByRecord = plugin.loadPageViewByRecordSetting();
+
+    const pref = plugin.getPageViewPreference('record-1');
+    assert.equal(pref.footerCollapsed, true);
+    assert.equal(pref.sections.linked, true);
+  } finally {
+    global.localStorage = previousLocalStorage;
+  }
+});
+
 let passed = 0;
 for (const { name, fn } of tests) {
   fn();

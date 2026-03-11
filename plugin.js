@@ -1077,10 +1077,7 @@ class Plugin extends AppPlugin {
   getDefaultFooterCollapsed(metrics) {
     if (!metrics?.ready) return false;
     if (metrics.propertyError || metrics.linkedError) return false;
-    if ((metrics.propertyCount + metrics.linkedCount) > 0) return false;
-    if (metrics.unlinkedDeferred === true) return true;
-    if (metrics.unlinkedError) return false;
-    return metrics.unlinkedCount === 0;
+    return (metrics.propertyCount + metrics.linkedCount) === 0;
   }
 
   isFooterCollapsed(state, metrics) {
@@ -1832,6 +1829,36 @@ class Plugin extends AppPlugin {
       for (const group of results?.unlinkedGroups || []) add(group?.record || null);
     }
 
+    return out;
+  }
+
+  filterPropertyGroups(groups, predicate) {
+    const match = typeof predicate === 'function' ? predicate : null;
+    if (!match) return [];
+
+    const out = [];
+    for (const group of groups || []) {
+      const propertyName = (group?.propertyName || '').trim();
+      if (!propertyName) continue;
+      const records = (group?.records || []).filter((record) => match(record, group));
+      if (records.length === 0) continue;
+      out.push({ propertyName, records });
+    }
+    return out;
+  }
+
+  filterLineGroups(groups, predicate) {
+    const match = typeof predicate === 'function' ? predicate : null;
+    if (!match) return [];
+
+    const out = [];
+    for (const group of groups || []) {
+      const record = group?.record || null;
+      if (!record?.guid) continue;
+      const lines = (group?.lines || []).filter((line) => match(line, record, group));
+      if (lines.length === 0) continue;
+      out.push({ record, lines });
+    }
     return out;
   }
 
@@ -4228,6 +4255,10 @@ class Plugin extends AppPlugin {
     });
   }
 
+  buildUnknownReferenceSectionMeta() {
+    return '- refs';
+  }
+
   buildReferenceViewState(state, {
     propertyGroups,
     propertyError,
@@ -4277,7 +4308,7 @@ class Plugin extends AppPlugin {
       && state.emptyStateExpanded !== true
       && unlinkedDeferred !== true;
 
-    const totalUniquePages = this.collectUniquePageGuids(propsAll, linkedAll, unlinkedAll);
+    const totalUniquePages = this.collectUniquePageGuids(propsAll, linkedAll, []);
     const filteredGroups = this.filterReferenceGroupsForRender({
       propsAll,
       linkedAll,
@@ -4296,9 +4327,9 @@ class Plugin extends AppPlugin {
     const hasScopedView = (searchMode === 'text' && Boolean(textQueryLower)) || (searchMode === 'query' && canApplyScopedQuery);
     const showUnlinkedCounts = searchMode !== 'query' || shouldScopeUnlinked;
     const showScopedCounts = hasScopedView || (searchMode === 'query' && canApplyScopedQuery);
-    const totalVisibleRefCount = totalPropRefCount + totalLinkedRefCount + (showUnlinkedCounts ? totalUnlinkedRefCount : 0);
-    const filteredVisibleRefCount = filteredPropRefCount + filteredLinkedRefCount + (showUnlinkedCounts ? filteredUnlinkedRefCount : 0);
-    const filteredUniquePages = this.collectUniquePageGuids(props, linked, unlinked);
+    const totalVisibleRefCount = totalPropRefCount + totalLinkedRefCount;
+    const filteredVisibleRefCount = filteredPropRefCount + filteredLinkedRefCount;
+    const filteredUniquePages = this.collectUniquePageGuids(props, linked, []);
 
     const sortSpec = {
       sortBy: this.normalizeSortBy(state?.sortBy) || this._defaultSortBy,
@@ -4430,13 +4461,15 @@ class Plugin extends AppPlugin {
       sectionId: 'unlinked',
       title: 'Unlinked References',
       collapsed: viewState.unlinkedSectionCollapsed,
-      meta: this.buildReferenceSectionMeta(
-        viewState.showScopedCounts && viewState.showUnlinkedCounts
-          ? viewState.filteredUnlinkedRefCount
-          : viewState.totalUnlinkedRefCount,
-        viewState.totalUnlinkedRefCount,
-        viewState.showScopedCounts && viewState.showUnlinkedCounts
-      )
+      meta: (viewState.unlinkedDeferred === true || viewState.unlinkedLoading === true)
+        ? this.buildUnknownReferenceSectionMeta()
+        : this.buildReferenceSectionMeta(
+          viewState.showScopedCounts && viewState.showUnlinkedCounts
+            ? viewState.filteredUnlinkedRefCount
+            : viewState.totalUnlinkedRefCount,
+          viewState.totalUnlinkedRefCount,
+          viewState.showScopedCounts && viewState.showUnlinkedCounts
+        )
     });
 
     if (viewState.unlinkedLoading) {
