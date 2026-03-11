@@ -235,60 +235,7 @@ class Plugin extends AppPlugin {
   getOrCreatePanelState(panel) {
     const panelId = panel?.getId?.() || null;
     if (!panelId) {
-      return {
-        panelId: 'unknown',
-        recordGuid: null,
-        mountedIn: null,
-        rootEl: null,
-        bodyEl: null,
-        countEl: null,
-        footerToggleEl: null,
-        filterToggleEl: null,
-        filterMenuEl: null,
-        sortToggleEl: null,
-        sortMenuEl: null,
-        searchToggleEl: null,
-        searchRowEl: null,
-        searchWrapEl: null,
-        searchInputEl: null,
-        searchHighlightTextEl: null,
-        searchClearEl: null,
-        searchRefreshEl: null,
-        searchAutocompleteEl: null,
-        searchAutocompleteItems: [],
-        searchAutocompleteSelectedIndex: 0,
-        searchAutocompleteOpen: false,
-        searchAutocompleteDismissHandler: null,
-        searchAutocompleteRequestSeq: 0,
-        searchQuery: '',
-        searchOpen: false,
-        filterPreset: this._defaultFilterPreset,
-        filterMenuOpen: false,
-        filterMenuDismissHandler: null,
-        filterMetaLoading: false,
-        footerCollapsed: null,
-        sectionCollapsed: this.createDefaultSectionCollapsedState(),
-        emptyStateExpanded: false,
-        linkedContextByLine: new Map(),
-        liveBaselineSnapshot: null,
-        liveCurrentSnapshot: null,
-        liveNewKeys: new Set(),
-        liveRemoteBadgesByKey: new Map(),
-        pendingRemoteSync: false,
-        pendingRemoteUsers: new Set(),
-        sortBy: this._defaultSortBy,
-        sortDir: this._defaultSortDir,
-        sortMenuOpen: false,
-        sortMenuDismissHandler: null,
-        queryFilterTimer: null,
-        queryFilterSeq: 0,
-        queryFilterState: null,
-        lastResults: null,
-        observer: null,
-        refreshTimer: null,
-        refreshSeq: 0,
-        isLoading: false
-      };
+      return this.createPanelState('unknown', null);
     }
 
     let state = this._panelStates.get(panelId) || null;
@@ -297,9 +244,16 @@ class Plugin extends AppPlugin {
       return state;
     }
 
-    state = {
-      panelId,
-      panel,
+    state = this.createPanelState(panelId, panel);
+
+    this._panelStates.set(panelId, state);
+    return state;
+  }
+
+  createPanelState(panelId, panel) {
+    return {
+      panelId: panelId || 'unknown',
+      panel: panel || null,
       recordGuid: null,
       mountedIn: null,
       rootEl: null,
@@ -352,9 +306,6 @@ class Plugin extends AppPlugin {
       refreshSeq: 0,
       isLoading: false
     };
-
-    this._panelStates.set(panelId, state);
-    return state;
   }
 
   disposePanelState(panelId) {
@@ -1710,19 +1661,36 @@ class Plugin extends AppPlugin {
     state.rootEl.classList.toggle('tlr-search-autocomplete-open', state.searchAutocompleteOpen === true);
   }
 
+  clearPointerDismissHandler(state, handlerKey) {
+    const key = typeof handlerKey === 'string' ? handlerKey.trim() : '';
+    if (!state || !key || !state[key]) return;
+    try {
+      document.removeEventListener('pointerdown', state[key], true);
+      document.removeEventListener('mousedown', state[key], true);
+    } catch (e) {
+      // ignore
+    }
+    state[key] = null;
+  }
+
+  setPointerDismissHandler(state, handlerKey, handler) {
+    const key = typeof handlerKey === 'string' ? handlerKey.trim() : '';
+    if (!state || !key || typeof handler !== 'function') return;
+    this.clearPointerDismissHandler(state, key);
+    state[key] = handler;
+    try {
+      document.addEventListener('pointerdown', handler, true);
+      document.addEventListener('mousedown', handler, true);
+    } catch (e) {
+      // ignore
+    }
+  }
+
   setSearchAutocompleteOpen(state, open) {
     if (!state) return;
     state.searchAutocompleteOpen = open === true && (state.searchAutocompleteItems?.length || 0) > 0;
 
-    if (state.searchAutocompleteDismissHandler) {
-      try {
-        document.removeEventListener('pointerdown', state.searchAutocompleteDismissHandler, true);
-        document.removeEventListener('mousedown', state.searchAutocompleteDismissHandler, true);
-      } catch (e) {
-        // ignore
-      }
-      state.searchAutocompleteDismissHandler = null;
-    }
+    this.clearPointerDismissHandler(state, 'searchAutocompleteDismissHandler');
 
     this.syncSearchAutocompleteControlState(state);
     this.renderSearchAutocomplete(state);
@@ -1742,13 +1710,7 @@ class Plugin extends AppPlugin {
       this.setSearchAutocompleteOpen(state, false);
     };
 
-    state.searchAutocompleteDismissHandler = onOutsideMouseDown;
-    try {
-      document.addEventListener('pointerdown', onOutsideMouseDown, true);
-      document.addEventListener('mousedown', onOutsideMouseDown, true);
-    } catch (e) {
-      // ignore
-    }
+    this.setPointerDismissHandler(state, 'searchAutocompleteDismissHandler', onOutsideMouseDown);
   }
 
   moveSearchAutocompleteSelection(state, delta) {
@@ -2236,15 +2198,7 @@ class Plugin extends AppPlugin {
     if (!state) return;
     state.filterMenuOpen = open === true;
 
-    if (state.filterMenuDismissHandler) {
-      try {
-        document.removeEventListener('pointerdown', state.filterMenuDismissHandler, true);
-        document.removeEventListener('mousedown', state.filterMenuDismissHandler, true);
-      } catch (e) {
-        // ignore
-      }
-      state.filterMenuDismissHandler = null;
-    }
+    this.clearPointerDismissHandler(state, 'filterMenuDismissHandler');
 
     this.syncFilterControlState(state);
 
@@ -2264,13 +2218,7 @@ class Plugin extends AppPlugin {
       this.setFilterMenuOpen(state, false);
     };
 
-    state.filterMenuDismissHandler = onOutsideMouseDown;
-    try {
-      document.addEventListener('pointerdown', onOutsideMouseDown, true);
-      document.addEventListener('mousedown', onOutsideMouseDown, true);
-    } catch (e) {
-      // ignore
-    }
+    this.setPointerDismissHandler(state, 'filterMenuDismissHandler', onOutsideMouseDown);
   }
 
   async handleFilterPresetSelected(state, nextPreset) {
@@ -2451,15 +2399,7 @@ class Plugin extends AppPlugin {
     if (!state) return;
     state.sortMenuOpen = open === true;
 
-    if (state.sortMenuDismissHandler) {
-      try {
-        document.removeEventListener('pointerdown', state.sortMenuDismissHandler, true);
-        document.removeEventListener('mousedown', state.sortMenuDismissHandler, true);
-      } catch (e) {
-        // ignore
-      }
-      state.sortMenuDismissHandler = null;
-    }
+    this.clearPointerDismissHandler(state, 'sortMenuDismissHandler');
 
     this.syncSortControlState(state);
 
@@ -2479,13 +2419,7 @@ class Plugin extends AppPlugin {
       this.setSortMenuOpen(state, false);
     };
 
-    state.sortMenuDismissHandler = onOutsideMouseDown;
-    try {
-      document.addEventListener('pointerdown', onOutsideMouseDown, true);
-      document.addEventListener('mousedown', onOutsideMouseDown, true);
-    } catch (e) {
-      // ignore
-    }
+    this.setPointerDismissHandler(state, 'sortMenuDismissHandler', onOutsideMouseDown);
   }
 
   renderFromCache(state) {
@@ -2502,6 +2436,54 @@ class Plugin extends AppPlugin {
     this.renderReferences(state, cached);
   }
 
+  readJsonStorage(key) {
+    const storageKey = typeof key === 'string' ? key.trim() : '';
+    if (!storageKey) return null;
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (typeof raw !== 'string' || !raw.trim()) return null;
+      return JSON.parse(raw);
+    } catch (e) {
+      // ignore
+    }
+    return null;
+  }
+
+  writeJsonStorage(key, value) {
+    const storageKey = typeof key === 'string' ? key.trim() : '';
+    if (!storageKey) return;
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(value));
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  parseStoredStringSet(value) {
+    if (!Array.isArray(value)) return null;
+    const out = new Set();
+    for (const item of value) {
+      if (typeof item !== 'string') continue;
+      const text = item.trim();
+      if (text) out.add(text);
+    }
+    return out;
+  }
+
+  parseStoredRecordMap(value, normalizeEntry) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const normalize = typeof normalizeEntry === 'function' ? normalizeEntry : null;
+    const out = {};
+    for (const [recordGuid, entry] of Object.entries(value)) {
+      const guid = typeof recordGuid === 'string' ? recordGuid.trim() : '';
+      if (!guid) continue;
+      const normalized = normalize ? normalize(entry) : entry;
+      if (normalized == null) continue;
+      out[guid] = normalized;
+    }
+    return out;
+  }
+
   normalizePageViewPreference(pref) {
     const sections = this.cloneSectionCollapsedState(pref?.sections);
     const footerCollapsed = typeof pref?.footerCollapsed === 'boolean' ? pref.footerCollapsed : null;
@@ -2510,32 +2492,14 @@ class Plugin extends AppPlugin {
   }
 
   loadPageViewByRecordSetting() {
-    try {
-      const raw = localStorage.getItem(this._storageKeyPageViewByRecord);
-      if (typeof raw !== 'string' || !raw.trim()) return {};
-
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-
-      const out = {};
-      for (const [recordGuid, pref] of Object.entries(parsed)) {
-        const guid = typeof recordGuid === 'string' ? recordGuid.trim() : '';
-        if (!guid) continue;
-        out[guid] = this.normalizePageViewPreference(pref);
-      }
-      return out;
-    } catch (e) {
-      // ignore
-    }
-    return {};
+    return this.parseStoredRecordMap(
+      this.readJsonStorage(this._storageKeyPageViewByRecord),
+      (pref) => this.normalizePageViewPreference(pref)
+    ) || {};
   }
 
   savePageViewByRecordSetting() {
-    try {
-      localStorage.setItem(this._storageKeyPageViewByRecord, JSON.stringify(this._pageViewByRecord || {}));
-    } catch (e) {
-      // ignore
-    }
+    this.writeJsonStorage(this._storageKeyPageViewByRecord, this._pageViewByRecord || {});
   }
 
   getPageViewPreference(recordGuid) {
@@ -2624,45 +2588,16 @@ class Plugin extends AppPlugin {
   }
 
   loadPropGroupCollapsedSetting() {
-    const parse = (v) => {
-      if (typeof v !== 'string' || !v.trim()) return null;
-      try {
-        const parsed = JSON.parse(v);
-        if (!Array.isArray(parsed)) return null;
-
-        const out = new Set();
-        for (const x of parsed) {
-          if (typeof x !== 'string') continue;
-          const t = x.trim();
-          if (t) out.add(t);
-        }
-        return out;
-      } catch (e) {
-        // ignore
-      }
-      return null;
-    };
-
-    try {
-      const v = localStorage.getItem(this._storageKeyPropGroupCollapsed);
-      const set = parse(v);
-      if (set) return set;
-    } catch (e) {
-      // ignore
-    }
+    const current = this.parseStoredStringSet(this.readJsonStorage(this._storageKeyPropGroupCollapsed));
+    if (current) return current;
 
     // Migration: older versions used a back"links" storage key.
     try {
       const legacyKey = this._legacyStorageKeyPropGroupCollapsed;
       if (legacyKey && legacyKey !== this._storageKeyPropGroupCollapsed) {
-        const v = localStorage.getItem(legacyKey);
-        const set = parse(v);
+        const set = this.parseStoredStringSet(this.readJsonStorage(legacyKey));
         if (set) {
-          try {
-            localStorage.setItem(this._storageKeyPropGroupCollapsed, JSON.stringify(Array.from(set)));
-          } catch (e) {
-            // ignore
-          }
+          this.writeJsonStorage(this._storageKeyPropGroupCollapsed, Array.from(set));
           return set;
         }
       }
@@ -2674,44 +2609,15 @@ class Plugin extends AppPlugin {
   }
 
   loadRecordGroupCollapsedSetting() {
-    const parse = (v) => {
-      if (typeof v !== 'string' || !v.trim()) return null;
-      try {
-        const parsed = JSON.parse(v);
-        if (!Array.isArray(parsed)) return null;
-
-        const out = new Set();
-        for (const x of parsed) {
-          if (typeof x !== 'string') continue;
-          const t = x.trim();
-          if (t) out.add(t);
-        }
-        return out;
-      } catch (e) {
-        // ignore
-      }
-      return null;
-    };
-
-    try {
-      const v = localStorage.getItem(this._storageKeyRecordGroupCollapsed);
-      const set = parse(v);
-      if (set) return set;
-    } catch (e) {
-      // ignore
-    }
+    const current = this.parseStoredStringSet(this.readJsonStorage(this._storageKeyRecordGroupCollapsed));
+    if (current) return current;
 
     try {
       const legacyKey = this._legacyStorageKeyRecordGroupCollapsed;
       if (legacyKey && legacyKey !== this._storageKeyRecordGroupCollapsed) {
-        const v = localStorage.getItem(legacyKey);
-        const set = parse(v);
+        const set = this.parseStoredStringSet(this.readJsonStorage(legacyKey));
         if (set) {
-          try {
-            localStorage.setItem(this._storageKeyRecordGroupCollapsed, JSON.stringify(Array.from(set)));
-          } catch (e) {
-            // ignore
-          }
+          this.writeJsonStorage(this._storageKeyRecordGroupCollapsed, Array.from(set));
           return set;
         }
       }
@@ -2723,21 +2629,11 @@ class Plugin extends AppPlugin {
   }
 
   savePropGroupCollapsedSetting() {
-    try {
-      const arr = Array.from(this._propGroupCollapsed || []);
-      localStorage.setItem(this._storageKeyPropGroupCollapsed, JSON.stringify(arr));
-    } catch (e) {
-      // ignore
-    }
+    this.writeJsonStorage(this._storageKeyPropGroupCollapsed, Array.from(this._propGroupCollapsed || []));
   }
 
   saveRecordGroupCollapsedSetting() {
-    try {
-      const arr = Array.from(this._recordGroupCollapsed || []);
-      localStorage.setItem(this._storageKeyRecordGroupCollapsed, JSON.stringify(arr));
-    } catch (e) {
-      // ignore
-    }
+    this.writeJsonStorage(this._storageKeyRecordGroupCollapsed, Array.from(this._recordGroupCollapsed || []));
   }
 
   isPropGroupCollapsed(propName) {
@@ -2782,48 +2678,26 @@ class Plugin extends AppPlugin {
   }
 
   loadSortByRecordSetting() {
-    const parse = (v) => {
-      if (typeof v !== 'string' || !v.trim()) return null;
-      try {
-        const parsed = JSON.parse(v);
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-
-        const out = {};
-        for (const [recordGuid, pref] of Object.entries(parsed)) {
-          const guid = typeof recordGuid === 'string' ? recordGuid.trim() : '';
-          if (!guid) continue;
-          const sortBy = this.normalizeSortBy(pref?.sortBy);
-          const sortDir = this.normalizeSortDir(pref?.sortDir);
-          if (!sortBy || !sortDir) continue;
-          out[guid] = { sortBy, sortDir };
-        }
-        return out;
-      } catch (e) {
-        // ignore
-      }
-      return null;
+    const normalizeSortPref = (pref) => {
+      const sortBy = this.normalizeSortBy(pref?.sortBy);
+      const sortDir = this.normalizeSortDir(pref?.sortDir);
+      if (!sortBy || !sortDir) return null;
+      return { sortBy, sortDir };
     };
 
-    try {
-      const v = localStorage.getItem(this._storageKeySortByRecord);
-      const map = parse(v);
-      if (map) return map;
-    } catch (e) {
-      // ignore
-    }
+    const current = this.parseStoredRecordMap(
+      this.readJsonStorage(this._storageKeySortByRecord),
+      normalizeSortPref
+    );
+    if (current) return current;
 
     // Migration: older versions used a back"links" storage key.
     try {
       const legacyKey = this._legacyStorageKeySortByRecord;
       if (legacyKey && legacyKey !== this._storageKeySortByRecord) {
-        const v = localStorage.getItem(legacyKey);
-        const map = parse(v);
+        const map = this.parseStoredRecordMap(this.readJsonStorage(legacyKey), normalizeSortPref);
         if (map) {
-          try {
-            localStorage.setItem(this._storageKeySortByRecord, JSON.stringify(map));
-          } catch (e) {
-            // ignore
-          }
+          this.writeJsonStorage(this._storageKeySortByRecord, map);
           return map;
         }
       }
@@ -2835,11 +2709,7 @@ class Plugin extends AppPlugin {
   }
 
   saveSortByRecordSetting() {
-    try {
-      localStorage.setItem(this._storageKeySortByRecord, JSON.stringify(this._sortByRecord || {}));
-    } catch (e) {
-      // ignore
-    }
+    this.writeJsonStorage(this._storageKeySortByRecord, this._sortByRecord || {});
   }
 
   setSortPreferenceForRecord(recordGuid, sortBy, sortDir) {
